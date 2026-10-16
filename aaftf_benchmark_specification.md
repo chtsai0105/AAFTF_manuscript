@@ -27,7 +27,7 @@ All scripts, workflows, and outputs follow this layout (repository root):
 ├── config/
 │   ├── samples.tsv                 # simulated samples: organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed
 │   ├── real_samples.tsv            # real datasets: samples.tsv columns + read1, read2, longreads, longread_type, sra_short, sra_long
-│   ├── contaminants.tsv            # organism, reference, accessions, group
+│   ├── contaminants.tsv            # organism, reference, accessions, group, assembly (source assembly, informational)
 │   └── params.yaml                 # coverage, spike levels, group weights, tracks, partitions, ...
 ├── data/                           # not tracked in git
 │   ├── sim/                        # simulated datasets

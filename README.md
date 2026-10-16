@@ -44,7 +44,7 @@ Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_
    other accessions fetch single sequences, e.g. a mitogenome missing from the assembly (skipped when the assembly
    already has it). `acc:copies` sets a copy number as for contaminants: the mitochondria are at a placeholder 50.
    Both fetch scripts skip existing files; `--force` re-downloads. The contaminant panel is defined in `config/contaminants.tsv`
-   (`organism, reference, accessions, group`); `workflow/scripts/fetch_contaminants.sh` downloads each row's NCBI
+   (`organism, reference, accessions, group, assembly`; `assembly` is the source NCBI assembly, for reference only); `workflow/scripts/fetch_contaminants.sh` downloads each row's NCBI
    nuccore accessions into its `reference` path (~57 Mb: *Ralstonia pickettii*, *Cutibacterium acnes*, human chr21 + mito,
    PhiX, pUC19, *Penicillium chrysogenum* chr IV + mito). No plant host: the samples are pure-culture lab strains, so
    plant DNA would only be realistic for a plant pathogen sequenced from host tissue.
