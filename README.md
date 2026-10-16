@@ -58,9 +58,11 @@ command line, e.g. `--partition batch`.
    `group_weights`, the spike level, `short_coverage`/`read_length`/`iss_model` (short) or
    `long_coverage`/`badread_args` (long), and the helper scripts that compute read counts and rename headers.
    It does not cover the simulator versions or the fixed seeds; set `reuse_reads: false` to force new reads.
-4. Every checkpoint is evaluated with QUAST, compleasm, BUSCO (`--miniprot`) and minimap2 against the truth reference.
+4. Every checkpoint is evaluated with QUAST, compleasm, BUSCO (`--miniprot`) and minimap2 against `data/references/combined/<sample>_with_contaminants.fa`
+   (the sample genome plus all contaminants), which labels each contig fungal or contaminant by its best match.
 
 Outputs (`results/`):
+- `01_checkpoints/<dataset>/`: the assembly FASTA saved after every ablation step
 - `final_report.tsv`: tidy long table (`dataset, sample, spike_pct, track, checkpoint, tool, metric, value`); datasets are `<sample>_spike<pct>_<track>`
 - `precision_recall_f1.tsv`: contig composition for every checkpoint, plus TP/FN/FP/TN, precision, recall and F1 for cp02 → cp03
 - `time_summary.tsv`: wall time, peak RSS, CPU % and exit status for every AAFTF / SPAdes call

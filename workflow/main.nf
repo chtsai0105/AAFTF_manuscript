@@ -2,7 +2,8 @@
 /*
  * AAFTF internal benchmarking suite (see aaftf_benchmark_specification.md)
  *
- *   1. Normalise reference headers (FUNGUS_*, CONTAM_<taxon>_*) and build combined truth FASTAs
+ *   1. Normalise reference headers (FUNGUS_*, CONTAM_<taxon>_*) and build one combined FASTA per sample
+ *      (sample + all contaminants, data/references/combined/<sample>_with_contaminants.fa)
  *   2. Simulate reads at 0/1/5/15% contaminant spike-in: InSilicoSeq Illumina and/or Badread ONT (as --tracks needs)
  *   3. Six-checkpoint ablation per dataset (track 'short'):
  *        cp00_raw_baseline        spades.py --isolate on raw reads
@@ -15,7 +16,7 @@
  *        long:   cp01 flye → cp02 vecscreen → cp03 purge → cp04 rmdup → cp05 polish (racon) → sort
  *        hybrid: same assembly and cleanup as 'long'; cp05 = racon, then polypolish with the
  *                filtered Illumina reads of the same dataset (cp01 of the short track)
- *   4. Evaluate every checkpoint: QUAST, compleasm, BUSCO (miniprot), minimap2 vs truth
+ *   4. Evaluate every checkpoint: QUAST, compleasm, BUSCO (miniprot), minimap2 vs the combined FASTA
  *   5. Aggregate into results/final_report.tsv
  * Every AAFTF / assembler call is wrapped in GNU time (scripts/timeit.sh).
  */
@@ -120,19 +121,20 @@ process FORMAT_CONTAM {
     """
 }
 
-process TRUTH_REFERENCE {
+// sample genome + all contaminants: minimap2 labels each contig FUNGUS_ / CONTAM_ by its best match
+process COMBINED_REFERENCE {
     tag "${meta.sample}"
-    publishDir "${params.datadir}/truth_references", mode: 'copy'
+    publishDir "${params.datadir}/references/combined", mode: 'copy'
 
     input:
     tuple val(meta), path(fungus), path(contams)
 
     output:
-    tuple val(meta), path("${meta.sample}_combined_truth.fa")
+    tuple val(meta), path("${meta.sample}_with_contaminants.fa")
 
     script:
     """
-    cat ${fungus} ${contams} > ${meta.sample}_combined_truth.fa
+    cat ${fungus} ${contams} > ${meta.sample}_with_contaminants.fa
     """
 }
 
@@ -233,6 +235,7 @@ process SIMULATE_LONG_SPIKE {
 
 process CP00_RAW_BASELINE {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), path(reads)
@@ -279,6 +282,7 @@ process READ_PREP {
 
 process CP01_MITO_FILTERED_ASM {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), path(reads)
@@ -297,6 +301,7 @@ process CP01_MITO_FILTERED_ASM {
 
 process CP01_LONG_ASM {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), path(reads)
@@ -315,6 +320,7 @@ process CP01_LONG_ASM {
 
 process CP02_VECSCREEN {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(_cp), path(asm)
@@ -332,6 +338,7 @@ process CP02_VECSCREEN {
 
 process CP03_TAXPURGE {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(_cp), path(asm)
@@ -349,6 +356,7 @@ process CP03_TAXPURGE {
 
 process CP03_FCSGX {
     tag "${meta.id}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(_cp), path(asm)
@@ -367,6 +375,7 @@ process CP03_FCSGX {
 
 process CP04_RMDUP {
     tag "${meta.id}:${branch}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(cp), path(asm)
@@ -387,6 +396,7 @@ process CP04_RMDUP {
 // so the short-track cp05 is sort only
 process CP05_SORTED {
     tag "${meta.id}:${branch}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(cp), path(asm)
@@ -406,6 +416,7 @@ process CP05_SORTED {
 // long: racon with the ONT reads; hybrid: racon, then polypolish with filtered Illumina reads
 process CP05_LONG_POLISHED_SORTED {
     tag "${meta.id}:${branch}"
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
     tuple val(meta), val(cp), path(asm), path(longreads), path(short_reads)
@@ -484,19 +495,19 @@ process BUSCO {
     """
 }
 
-process MINIMAP2_TRUTH {
+process MINIMAP2_COMBINED {
     tag "${meta.id}:${cp}"
     publishDir "${params.outdir}/04_decontamination/paf", mode: 'copy'
 
     input:
-    tuple val(meta), val(cp), path(asm), path(truth)
+    tuple val(meta), val(cp), path(asm), path(combined)
 
     output:
     tuple val(meta), val(cp), path(asm), path("${meta.id}__${cp}.paf")
 
     script:
     """
-    minimap2 -x asm5 --secondary=no -t ${task.cpus} ${truth} ${asm} > ${meta.id}__${cp}.paf
+    minimap2 -x asm5 --secondary=no -t ${task.cpus} ${combined} ${asm} > ${meta.id}__${cp}.paf
     """
 }
 
@@ -565,7 +576,7 @@ workflow {
     )
     contam_set = contams.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
 
-    truth = TRUTH_REFERENCE(fungus.combine(contam_set).map { m, f, _g, c -> tuple(m, f, c) })
+    combined = COMBINED_REFERENCE(fungus.combine(contam_set).map { m, f, _g, c -> tuple(m, f, c) })
 
     def tracks = params.tracks.toString().tokenize(',')*.trim()
     def bad = tracks - ['short', 'long', 'hybrid']
@@ -579,8 +590,8 @@ workflow {
     def need_ont = want_long || want_hybrid
 
     levels = channel.fromList(params.spike_levels.toString().tokenize(','))
-    // (meta, fungus.fa, truth.fa)
-    refs = fungus.join(truth)
+    // (meta, fungus.fa, sample_with_contaminants.fa)
+    refs = fungus.join(combined)
     times = channel.empty()
     composition = channel.empty()
     assemblies = channel.empty()
@@ -606,8 +617,8 @@ workflow {
         datasets = sim.reads
             .mix(reused.map { m, pct, r, _c -> tuple(m, pct, r) })
             .combine(refs, by: 0)
-            .map { m, pct, reads, ref, tru ->
-                tuple(m + [id: "${m.sample}_spike${pct}_short".toString(), pct: pct, track: 'short', ref: ref, truth: tru], reads)
+            .map { m, pct, reads, ref, comb ->
+                tuple(m + [id: "${m.sample}_spike${pct}_short".toString(), pct: pct, track: 'short', ref: ref, combined: comb], reads)
             }
         prep = READ_PREP(datasets)
         illumina = prep.reads
@@ -647,8 +658,8 @@ workflow {
         long_ds = lsim.reads
             .mix(lreused.map { m, pct, r, _c -> tuple(m, pct, r) })
             .combine(refs, by: 0)
-            .map { m, pct, reads, ref, tru ->
-                tuple(m + [id: "${m.sample}_spike${pct}_long".toString(), pct: pct, track: 'long', ref: ref, truth: tru], reads)
+            .map { m, pct, reads, ref, comb ->
+                tuple(m + [id: "${m.sample}_spike${pct}_long".toString(), pct: pct, track: 'long', ref: ref, combined: comb], reads)
             }
         cp01l = CP01_LONG_ASM(long_ds)
         assemblies = assemblies.mix(cp01l.fasta)
@@ -705,7 +716,7 @@ workflow {
     quast = QUAST(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.ref) })
     comp = COMPLEASM(checkpoints)
     busco = BUSCO(checkpoints)
-    paf = MINIMAP2_TRUTH(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.truth) })
+    paf = MINIMAP2_COMBINED(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.combined) })
     cp02_paf = paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m, a, p) }
     decon = DECON_METRICS(paf.combine(cp02_paf, by: 0))
 

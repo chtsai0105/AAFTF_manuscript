@@ -27,7 +27,7 @@ blast = "*"                    # vecscreen
 bwa = "*"
 bowtie2 = ">=2.5.5,<3"
 samtools = ">=1.24,<2"
-minimap2 = "*"                 # rmdup, polish; also contig -> truth alignment
+minimap2 = "*"                 # rmdup, polish; also contigs -> references/combined labelling
 flye = "*"                     # long / hybrid tracks
 racon = "*"                    # long / hybrid polish
 polypolish = ">=0.7.1,<0.8"    # hybrid polish
