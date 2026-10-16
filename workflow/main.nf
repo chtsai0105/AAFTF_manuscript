@@ -61,7 +61,7 @@ def optFile(x) {
 
 def sampleRow(r, origin) {
     def meta = [
-        sample: taxonKey(r.sample), name: r.sample, origin: origin, genome_size: r.genome_size, phylum: r.phylum,
+        sample: taxonKey(r.organism), name: r.organism, origin: origin, genome_size: r.genome_size, phylum: r.phylum,
         taxid: r.taxid, lineage: r.lineage, mito_seed: optFile(r.mito_seed), reference: r.reference,
         accessions: r.accessions ?: '', read1: optFile(r.read1), read2: optFile(r.read2), longreads: optFile(r.longreads), longread_type: r.longread_type ?: null,
     ]
@@ -84,8 +84,11 @@ def fileSig(f) {
 }
 
 def simHash(m, pct, kind) {
-    def contam_rows = file(params.contaminants).readLines().drop(1).findAll { l -> l.trim() }
-    def parts = [kind, pct, fileSig(m.reference), fileSig(params.contaminants)] + contam_rows.collect { l -> fileSig(l.tokenize('\t')[2]) } + [params.group_weights, file("${projectDir}/scripts/format_reference_headers.py").text]
+    // contaminant FASTAs: the `reference` column, looked up by name (column order may change)
+    def lines = file(params.contaminants).readLines().findAll { l -> l.trim() }
+    def ref_col = lines[0].split('\t', -1).toList().indexOf('reference')
+    def contam_refs = lines.drop(1).collect { l -> l.split('\t', -1)[ref_col] }
+    def parts = [kind, pct, fileSig(m.reference), fileSig(params.contaminants)] + contam_refs.collect { f -> fileSig(f) } + [params.group_weights, file("${projectDir}/scripts/format_reference_headers.py").text]
     parts += kind == 'short'
         ? [params.short_coverage, params.read_length, params.iss_model, file("${projectDir}/scripts/make_readcounts.py").text]
         : [params.long_coverage, params.badread_args, file("${projectDir}/scripts/make_long_quantities.py").text]
@@ -602,7 +605,7 @@ workflow {
     real_fungus = fungus_all.filter { m, _f -> m.origin == 'real' }
 
     contams = FORMAT_CONTAM(
-        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(taxonKey(r.taxon), r.group, r.accessions ?: '', file(r.reference)) }
+        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(taxonKey(r.organism), r.group, r.accessions ?: '', file(r.reference)) }
     )
     contam_set = contams.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
 

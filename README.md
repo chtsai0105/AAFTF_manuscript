@@ -25,7 +25,7 @@ data/real/reads/                                     real sequencing reads
 ## Real datasets
 
 `config/real_samples.tsv` lists real runs whose exact strain has a reference genome. Columns are those of
-`samples.tsv` plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
+`samples.tsv` (`organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed`) plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
 `sra_short` / `sra_long` (SRA run accessions, comma-separated). `pixi run fetch-real` downloads the references
 (`fetch_samples.sh`) and reads (`fetch_reads.sh`, sra-tools). Tracks are taken from the reads present: short
 (read1/read2), long (longreads), hybrid (both). Datasets are named `<sample>_real_<track>`; they go through the
@@ -34,7 +34,7 @@ needs the simulated answer key. In `final_report.tsv`, `origin` is `real` and `s
 
 Example row (tab-separated):
 ```
-Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  41100000  Ascomycota  5141  sordariomycetes_odb10    GCF_000182925.2,NC_026614.1:30  data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
+Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_026614.1:30  41100000  Ascomycota  5141  sordariomycetes_odb10    data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
 ```
 
 ## Steps
@@ -44,7 +44,7 @@ Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  41100000  Ascomycot
    other accessions fetch single sequences, e.g. a mitogenome missing from the assembly (skipped when the assembly
    already has it). `acc:copies` sets a copy number as for contaminants: the mitochondria are at a placeholder 50.
    Both fetch scripts skip existing files; `--force` re-downloads. The contaminant panel is defined in `config/contaminants.tsv`
-   (`taxon, group, reference, accessions`); `workflow/scripts/fetch_contaminants.sh` downloads each row's NCBI
+   (`organism, reference, accessions, group`); `workflow/scripts/fetch_contaminants.sh` downloads each row's NCBI
    nuccore accessions into its `reference` path (~57 Mb: *Ralstonia pickettii*, *Cutibacterium acnes*, human chr21 + mito,
    PhiX, pUC19, *Penicillium chrysogenum* chr IV + mito). No plant host: the samples are pure-culture lab strains, so
    plant DNA would only be realistic for a plant pathogen sequenced from host tissue.

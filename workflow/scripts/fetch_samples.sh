@@ -22,8 +22,8 @@ key=${NCBI_API_KEY:+&api_key=$NCBI_API_KEY}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 col() { head -1 "$tsv" | tr '\t' '\n' | grep -nx "$1" | cut -d: -f1; }
-c_name=$(col sample) c_ref=$(col reference) c_acc=$(col accessions)
-[[ -n $c_name && -n $c_ref && -n $c_acc ]] || { echo "ERROR: $tsv needs columns sample, reference, accessions" >&2; exit 1; }
+c_name=$(col organism) c_ref=$(col reference) c_acc=$(col accessions)
+[[ -n $c_name && -n $c_ref && -n $c_acc ]] || { echo "ERROR: $tsv needs columns organism, reference, accessions" >&2; exit 1; }
 
 fetch_assembly() {   # $1 accession, $2 output fasta (appended)
     curl -sSf --retry 5 --retry-delay 3 -o "$tmp/asm.zip" \

@@ -49,7 +49,7 @@ dump() {
 }
 
 tail -n +2 "$tsv" | while IFS= read -r line; do
-    name=$(field sample "$line"); [[ -n $name ]] || continue
+    name=$(field organism "$line"); [[ -n $name ]] || continue
     r1=$(field read1 "$line") r2=$(field read2 "$line") lr=$(field longreads "$line")
     s_short=$(field sra_short "$line" | tr -d ' ') s_long=$(field sra_long "$line" | tr -d ' ')
 

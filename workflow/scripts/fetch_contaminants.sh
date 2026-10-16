@@ -3,7 +3,7 @@
 #
 #   workflow/scripts/fetch_contaminants.sh [--force] [tsv]   (default: config/contaminants.tsv)
 #
-# The TSV is the single source of truth (columns: taxon, group, reference, accessions).
+# The TSV is the single source of truth (columns: organism, reference, accessions, group).
 # Each row's comma-separated nuccore accessions are fetched into its `reference` path; an optional
 # ':<copies>' suffix (copy number, used by the read simulators) is ignored here.
 # Rows whose reference already exists as a non-empty FASTA are skipped (--force re-downloads them);
@@ -17,8 +17,8 @@ EUTILS=https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi
 key=${NCBI_API_KEY:+&api_key=$NCBI_API_KEY}
 
 col() { head -1 "$tsv" | tr '\t' '\n' | grep -nx "$1" | cut -d: -f1; }
-c_taxon=$(col taxon) c_ref=$(col reference) c_acc=$(col accessions)
-[[ -n $c_taxon && -n $c_ref && -n $c_acc ]] || { echo "ERROR: $tsv needs columns taxon, reference, accessions" >&2; exit 1; }
+c_taxon=$(col organism) c_ref=$(col reference) c_acc=$(col accessions)
+[[ -n $c_taxon && -n $c_ref && -n $c_acc ]] || { echo "ERROR: $tsv needs columns organism, reference, accessions" >&2; exit 1; }
 
 # cut keeps empty fields (bash `read` would merge consecutive tabs and shift the columns)
 field() { cut -f"$1" <<< "$2"; }

@@ -25,9 +25,9 @@ All scripts, workflows, and outputs follow this layout (repository root):
 ├── README.md
 ├── pixi.toml / pixi.lock              # tool environments (default, eval, busco)
 ├── config/
-│   ├── samples.tsv                 # simulated samples: sample (NCBI organism name), reference, genome_size, phylum, taxid, lineage, mito_seed, accessions
+│   ├── samples.tsv                 # simulated samples: organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed
 │   ├── real_samples.tsv            # real datasets: samples.tsv columns + read1, read2, longreads, longread_type, sra_short, sra_long
-│   ├── contaminants.tsv            # taxon (NCBI organism name), group, reference, accessions
+│   ├── contaminants.tsv            # organism, reference, accessions, group
 │   └── params.yaml                 # coverage, spike levels, group weights, tracks, partitions, ...
 ├── data/                           # not tracked in git
 │   ├── sim/                        # simulated datasets
@@ -66,6 +66,8 @@ All scripts, workflows, and outputs follow this layout (repository root):
     └── read_composition.tsv        # realised fungal / contaminant amounts per dataset
 ```
 
+**Columns.** All three TSVs start with `organism` (NCBI organism name), `reference` (local FASTA) and `accessions` (NCBI accessions, optional `:copies`), followed by file-specific columns.
+
 **Names.** Sample and contaminant names are the NCBI organism names (e.g. `Neurospora crassa OR74A`); file names and FASTA headers use a safe key with non-alphanumeric runs replaced by `_` (e.g. `Neurospora_crassa_OR74A`). Datasets are named `{sample}_spike{pct}_{track}` (simulated) or `{sample}_real_{track}` (real reads).
 
 ---
@@ -75,7 +77,7 @@ All scripts, workflows, and outputs follow this layout (repository root):
 ### 3.1 Reference Genomes and Header Normalization
 References are listed in the TSVs with NCBI accessions and downloaded by `fetch_samples.sh` (GCF_/GCA_ assemblies via NCBI Datasets, single sequences via E-utilities) and `fetch_contaminants.sh`. An accession may carry a copy number per nuclear genome as `acc:copies` (default 1), e.g. a mitochondrion `NC_012920.1:200`.
 
-| sample (NCBI organism name) | assembly | phylum | BUSCO lineage |
+| organism (NCBI organism name) | assembly | phylum | BUSCO lineage |
 |---|---|---|---|
 | *Neurospora crassa* OR74A | GCF_000182925.2 (incl. mito NC_026614.1) | Ascomycota | sordariomycetes_odb10 |
 | *Saccharomyces cerevisiae* S288C | GCF_000146045.2 (incl. mito NC_001224.1) | Ascomycota | saccharomycetes_odb10 |
@@ -117,7 +119,7 @@ contaminant amount = fungal amount × p / (100 − p) (reads for short, bases fo
 * **Spike-in levels:** `0%` (clean control), `1%`, `5%`, `15%` (`spike_levels`).
 * **Group weights** (`group_weights`): 65% bacteria, 15% host, 10% vector, 10% fungal cross-contaminant; equal split between taxa of a group; length × copy number within an organism.
 
-| group | taxon (NCBI organism name) | accessions | rationale |
+| group | organism (NCBI organism name) | accessions | rationale |
 |---|---|---|---|
 | bacteria | *Ralstonia pickettii* (K-288, type material) | NZ_CP066771.1, NZ_CP066772.2, NZ_CP066773.1 | DNA-extraction kit / reagent contaminant |
 | bacteria | *Cutibacterium acnes* subsp. *acnes* (NBRC 107605) | NZ_AP019723.1 | skin / handling contaminant |
