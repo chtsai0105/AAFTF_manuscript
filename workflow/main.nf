@@ -3,7 +3,7 @@
  * AAFTF internal benchmarking suite (see aaftf_benchmark_specification.md)
  *
  *   1. Normalise reference headers (FUNGUS_*, CONTAM_<taxon>_*) and build one combined FASTA per sample
- *      (sample + all contaminants, data/references/combined/<sample>_with_contaminants.fa)
+ *      (sample + all contaminants, data/sim/references/combined/<sample>_with_contaminants.fa)
  *   2. Simulate reads at 0/1/5/15% contaminant spike-in: InSilicoSeq Illumina and/or Badread ONT (as --tracks needs)
  *   3. Six-checkpoint ablation per dataset (track 'short'):
  *        cp00_raw_baseline        spades.py --isolate on raw reads
@@ -25,7 +25,11 @@ nextflow.enable.dsl = 2
 params.samples = 'config/samples.tsv'
 params.contaminants = 'config/contaminants.tsv'
 params.outdir = 'results'
-params.datadir = 'data'
+// simulated datasets (references, reads) and real datasets (same-strain references, sequenced reads)
+params.sim_dir = 'data/sim'
+params.real_dir = 'data/real'
+// real datasets (same-strain reference + sequenced reads); skipped when the file does not exist
+params.real_samples = 'config/real_samples.tsv'
 params.short_coverage = 50
 params.read_length = 150
 params.iss_model = 'novaseq'
@@ -33,7 +37,7 @@ params.spike_levels = '0,1,5,15'
 params.group_weights = 'bacteria:0.65,host:0.15,vector:0.1,fungal:0.1'
 // any of: short,long,hybrid
 params.tracks = 'short'
-// use reads already in <datadir>/reads when their .sim_hash matches
+// use reads already in <sim_dir>/reads when their .sim_hash matches
 params.reuse_reads = true
 params.badread_args = '--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25'
 params.long_coverage = 35
@@ -48,6 +52,20 @@ params.busco_downloads = null
 // file/header-safe key for an NCBI organism name (contaminant taxa and sample names), e.g. 'Cutibacterium acnes subsp. acnes' -> 'Cutibacterium_acnes_subsp_acnes'
 def taxonKey(name) {
     name.trim().replaceAll(/[^A-Za-z0-9]+/, '_').replaceAll(/^_|_$/, '')
+}
+
+// one meta map + reference per row of samples.tsv (origin 'sim') or real_samples.tsv (origin 'real')
+def optFile(x) {
+    x ? file(x) : null
+}
+
+def sampleRow(r, origin) {
+    def meta = [
+        sample: taxonKey(r.sample), name: r.sample, origin: origin, genome_size: r.genome_size, phylum: r.phylum,
+        taxid: r.taxid, lineage: r.lineage, mito_seed: optFile(r.mito_seed), reference: r.reference,
+        accessions: r.accessions ?: '', read1: optFile(r.read1), read2: optFile(r.read2), longreads: optFile(r.longreads), longread_type: r.longread_type ?: null,
+    ]
+    tuple(meta, file(r.reference))
 }
 
 def datasetKey(m) {
@@ -77,7 +95,7 @@ def simHash(m, pct, kind) {
 // previously simulated files for a sample × spike level ('short' or 'long'); [] unless all exist
 // and were made with the same settings (matching .sim_hash)
 def existingReads(m, pct, kind) {
-    def d = "${params.datadir}/reads/${m.sample}_spike${pct}"
+    def d = "${params.sim_dir}/reads/${m.sample}_spike${pct}"
     def fs = kind == 'short'
         ? [file("${d}_R1.fastq.gz"), file("${d}_R2.fastq.gz"), file("${d}_short.composition.tsv")]
         : [file("${d}_ont.fastq.gz"), file("${d}_long.composition.tsv")]
@@ -90,7 +108,7 @@ def existingReads(m, pct, kind) {
 
 process FORMAT_FUNGUS {
     tag "${meta.sample}"
-    publishDir "${params.datadir}/references/fungus", mode: 'copy'
+    publishDir path: { meta.origin == 'real' ? "${params.real_dir}/references" : "${params.sim_dir}/references/fungus" }, mode: 'copy'
 
     input:
     tuple val(meta), path(ref)
@@ -106,7 +124,7 @@ process FORMAT_FUNGUS {
 
 process FORMAT_CONTAM {
     tag "${taxon}"
-    publishDir "${params.datadir}/references/contaminants", mode: 'copy'
+    publishDir "${params.sim_dir}/references/contaminants", mode: 'copy'
 
     input:
     tuple val(taxon), val(group), val(accessions), path(ref)
@@ -124,7 +142,7 @@ process FORMAT_CONTAM {
 // sample genome + all contaminants: minimap2 labels each contig FUNGUS_ / CONTAM_ by its best match
 process COMBINED_REFERENCE {
     tag "${meta.sample}"
-    publishDir "${params.datadir}/references/combined", mode: 'copy'
+    publishDir "${params.sim_dir}/references/combined", mode: 'copy'
 
     input:
     tuple val(meta), path(fungus), path(contams)
@@ -140,7 +158,7 @@ process COMBINED_REFERENCE {
 
 process SIMULATE_SHORT {
     tag "${meta.sample}:${pct}%"
-    publishDir "${params.datadir}/reads", mode: 'copy'
+    publishDir "${params.sim_dir}/reads", mode: 'copy'
 
     input:
     tuple val(meta), path(fungus), val(pct), val(groups), path(contams), val(hash)
@@ -198,7 +216,7 @@ process SIMULATE_LONG_FUNGUS {
 
 process SIMULATE_LONG_SPIKE {
     tag "${meta.sample}:${pct}%"
-    publishDir "${params.datadir}/reads", mode: 'copy'
+    publishDir "${params.sim_dir}/reads", mode: 'copy'
 
     input:
     tuple val(meta), path(fungus), path(fungus_reads), val(pct), val(groups), path(contams), val(hash)
@@ -313,7 +331,7 @@ process CP01_LONG_ASM {
     script:
     """
     timeit.sh ${meta.id} cp01_flye_asm assemble \\
-        AAFTF assemble --method flye -lr ${reads} --longread_type ${params.longread_type} \\
+        AAFTF assemble --method flye -lr ${reads} --longread_type ${meta.longread_type ?: params.longread_type} \\
         --genome_size ${meta.genome_size} -c ${task.cpus} -m ${task.memory.toGiga()} -o ${meta.id}.cp01.fasta
     """
 }
@@ -560,23 +578,7 @@ process AGGREGATE {
 // ================================================================ workflow
 
 workflow {
-    // ---- references
-    samples = channel.fromPath(params.samples)
-        .splitCsv(header: true, sep: '\t')
-        .map { r ->
-            tuple(
-                [sample: taxonKey(r.sample), name: r.sample, genome_size: r.genome_size, phylum: r.phylum, taxid: r.taxid, lineage: r.lineage, mito_seed: r.mito_seed ? file(r.mito_seed) : null, reference: r.reference, accessions: r.accessions ?: ''],
-                file(r.reference),
-            )
-        }
-    fungus = FORMAT_FUNGUS(samples)
-
-    contams = FORMAT_CONTAM(
-        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(taxonKey(r.taxon), r.group, r.accessions ?: '', file(r.reference)) }
-    )
-    contam_set = contams.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
-
-    combined = COMBINED_REFERENCE(fungus.combine(contam_set).map { m, f, _g, c -> tuple(m, f, c) })
+    NO_FILE = file("${projectDir}/assets/NO_FILE")
 
     def tracks = params.tracks.toString().tokenize(',')*.trim()
     def bad = tracks - ['short', 'long', 'hybrid']
@@ -589,6 +591,23 @@ workflow {
     def need_illumina = want_short || want_hybrid
     def need_ont = want_long || want_hybrid
 
+    // ---- references: simulated samples (samples.tsv) and real datasets (real_samples.tsv)
+    sim_rows = channel.fromPath(params.samples).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'sim') }
+    def real_tsv = params.real_samples ? file(params.real_samples) : null
+    real_rows = real_tsv && real_tsv.exists()
+        ? channel.fromPath(real_tsv).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'real') }
+        : channel.empty()
+    fungus_all = FORMAT_FUNGUS(sim_rows.mix(real_rows))
+    fungus = fungus_all.filter { m, _f -> m.origin == 'sim' }
+    real_fungus = fungus_all.filter { m, _f -> m.origin == 'real' }
+
+    contams = FORMAT_CONTAM(
+        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(taxonKey(r.taxon), r.group, r.accessions ?: '', file(r.reference)) }
+    )
+    contam_set = contams.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
+
+    combined = COMBINED_REFERENCE(fungus.combine(contam_set).map { m, f, _g, c -> tuple(m, f, c) })
+
     levels = channel.fromList(params.spike_levels.toString().tokenize(','))
     // (meta, fungus.fa, sample_with_contaminants.fa)
     refs = fungus.join(combined)
@@ -598,8 +617,10 @@ workflow {
     checkpoints = channel.empty()
     // (meta of short dataset, filtered Illumina reads)
     illumina = channel.empty()
+    // (meta of long dataset, ONT reads)
+    ont = channel.empty()
 
-    // ---- Illumina reads: needed by the short track and for hybrid polishing
+    // ---- Illumina datasets: needed by the short track and for hybrid polishing
     if (need_illumina) {
         short_jobs = fungus
             .combine(levels)
@@ -614,12 +635,19 @@ workflow {
             tuple(m, pct, fs[0..1], fs[2])
         }
         composition = composition.mix(sim.composition, reused.map { _m, _p, _r, c -> c })
-        datasets = sim.reads
+        sim_short = sim.reads
             .mix(reused.map { m, pct, r, _c -> tuple(m, pct, r) })
             .combine(refs, by: 0)
             .map { m, pct, reads, ref, comb ->
                 tuple(m + [id: "${m.sample}_spike${pct}_short".toString(), pct: pct, track: 'short', ref: ref, combined: comb], reads)
             }
+        // real: no contaminant answer key, so no combined FASTA (decontamination metrics are skipped)
+        real_short = real_fungus
+            .filter { m, _f -> m.read1 }
+            .map { m, ref ->
+                tuple(m + [id: "${m.sample}_real_short".toString(), pct: 'real', track: 'short', ref: ref, combined: null], [m.read1, m.read2].findAll { r -> r })
+            }
+        datasets = sim_short.mix(real_short)
         prep = READ_PREP(datasets)
         illumina = prep.reads
         times = times.mix(prep.times)
@@ -634,9 +662,8 @@ workflow {
         }
     }
 
-    // ---- ONT reads: one flye assembly per sample × spike, shared by the long and hybrid
-    // tracks until polishing (those shared checkpoints are labelled '<sample>_spike<pct>_long')
-    ont = channel.empty()
+    // ---- ONT datasets: one flye assembly per dataset, shared by the long and hybrid
+    // tracks until polishing (those shared checkpoints are labelled '..._long')
     if (need_ont) {
         long_jobs = fungus
             .combine(levels)
@@ -654,18 +681,23 @@ workflow {
             def fs = existingReads(m, pct, 'long')
             tuple(m, pct, fs[0], fs[1])
         }
-        composition = composition.mix(lreused.map { _m, _p, _r, c -> c })
-        long_ds = lsim.reads
+        composition = composition.mix(lsim.composition, lreused.map { _m, _p, _r, c -> c })
+        sim_long = lsim.reads
             .mix(lreused.map { m, pct, r, _c -> tuple(m, pct, r) })
             .combine(refs, by: 0)
             .map { m, pct, reads, ref, comb ->
                 tuple(m + [id: "${m.sample}_spike${pct}_long".toString(), pct: pct, track: 'long', ref: ref, combined: comb], reads)
             }
+        real_long = real_fungus
+            .filter { m, _f -> m.longreads }
+            .map { m, ref ->
+                tuple(m + [id: "${m.sample}_real_long".toString(), pct: 'real', track: 'long', ref: ref, combined: null], m.longreads)
+            }
+        long_ds = sim_long.mix(real_long)
         cp01l = CP01_LONG_ASM(long_ds)
         assemblies = assemblies.mix(cp01l.fasta)
         checkpoints = checkpoints.mix(cp01l.fasta)
         times = times.mix(cp01l.times)
-        composition = composition.mix(lsim.composition)
         ont = long_ds
     }
 
@@ -692,22 +724,19 @@ workflow {
 
     // ---- cp05 long (racon) and/or hybrid (racon + polypolish)
     if (need_ont) {
-        // (sample, pct) links a long dataset to the short dataset's filtered reads
-        ont_reads = ont.map { m, r -> tuple(datasetKey(m), r) }
+        // (sample, pct) links a long dataset to the Illumina reads of the same sample and spike level
         long_cp04 = cp04.fasta
             .filter { m, _cp, _a -> m.track == 'long' }
             .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
-            .combine(ont_reads, by: 0)
-        if (want_hybrid) {
-            long_cp04 = long_cp04.combine(illumina.map { m, r -> tuple(datasetKey(m), r) }, by: 0)
-        }
-        else {
-            long_cp04 = long_cp04.map { k, m, cp, a, lr -> tuple(k, m, cp, a, lr, file("${projectDir}/assets/NO_FILE")) }
-        }
-        polish_in = long_cp04.flatMap { _k, m, cp, a, lr, sr ->
-            (want_long ? [tuple(m, cp, a, lr, sr)] : []) + (want_hybrid ? [tuple(asHybrid(m), cp, a, lr, sr)] : [])
-        }
-        cp05l = CP05_LONG_POLISHED_SORTED(polish_in)
+            .combine(ont.map { m, r -> tuple(datasetKey(m), r) }, by: 0)
+        long_in = want_long
+            ? long_cp04.map { _k, m, cp, a, lr -> tuple(m, cp, a, lr, NO_FILE) }
+            : channel.empty()
+        // hybrid only where Illumina reads exist for the same dataset
+        hybrid_in = want_hybrid
+            ? long_cp04.combine(illumina.map { m, r -> tuple(datasetKey(m), r) }, by: 0).map { _k, m, cp, a, lr, sr -> tuple(asHybrid(m), cp, a, lr, sr) }
+            : channel.empty()
+        cp05l = CP05_LONG_POLISHED_SORTED(long_in.mix(hybrid_in))
         times = times.mix(cp05l.times)
         checkpoints = checkpoints.mix(cp05l.fasta)
     }
@@ -716,7 +745,8 @@ workflow {
     quast = QUAST(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.ref) })
     comp = COMPLEASM(checkpoints)
     busco = BUSCO(checkpoints)
-    paf = MINIMAP2_COMBINED(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.combined) })
+    // decontamination metrics need the combined FASTA, i.e. simulated datasets only
+    paf = MINIMAP2_COMBINED(checkpoints.filter { m, _cp, _a -> m.combined }.map { m, cp, a -> tuple(m, cp, a, m.combined) })
     cp02_paf = paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m, a, p) }
     decon = DECON_METRICS(paf.combine(cp02_paf, by: 0))
 
@@ -724,8 +754,8 @@ workflow {
         quast.collect(),
         comp.collect(),
         busco.collect(),
-        decon.collect(),
+        decon.collect().ifEmpty([]),
         times.collect(),
-        composition.collect(),
+        composition.collect().ifEmpty([]),
     )
 }

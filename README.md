@@ -5,12 +5,39 @@ Implements [aaftf_benchmark_specification.md](aaftf_benchmark_specification.md) 
 ```
 pixi install --all                       # tools: see pixi.toml (environments default, eval, busco)
 pixi run fetch-samples && pixi run fetch-contaminants
+pixi run fetch-real                      # optional: real datasets in config/real_samples.tsv
 pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
 ```
 
 With `-profile slurm`, jobs go to the `partition` set in `config/params.yaml` (default `epyc`), and FCS-GX
 (`CP03_FCSGX`, ~470 GB database in RAM) goes to `fcsgx_partition` (default `highmem`). Override either on the
 command line, e.g. `--partition batch`.
+
+## Data layout
+
+```
+data/sim/references/{fungus,contaminants,combined}/   simulated datasets: references
+data/sim/reads/                                      simulated reads (+ composition, .sim_hash)
+data/real/references/                                real datasets: same-strain reference genomes
+data/real/reads/                                     real sequencing reads
+```
+
+## Real datasets
+
+`config/real_samples.tsv` lists real runs whose exact strain has a reference genome. Columns are those of
+`samples.tsv` plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
+`sra_short` / `sra_long` (SRA run accessions, comma-separated). `pixi run fetch-real` downloads the references
+(`fetch_samples.sh`) and reads (`fetch_reads.sh`, sra-tools). Tracks are taken from the reads present: short
+(read1/read2), long (longreads), hybrid (both). Datasets are named `<sample>_real_<track>`; they go through the
+same checkpoints and QUAST / compleasm / BUSCO / timing, but not the decontamination precision/recall, which
+needs the simulated answer key. In `final_report.tsv`, `origin` is `real` and `spike_pct` is empty.
+
+Example row (tab-separated):
+```
+Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  41100000  Ascomycota  5141  sordariomycetes_odb10    GCF_000182925.2,NC_026614.1:30  data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
+```
+
+## Steps
 
 1. Fungal references are defined in `config/samples.tsv`; `workflow/scripts/fetch_samples.sh` downloads each row's
    `accessions` into its `reference` path. A `GCF_`/`GCA_` accession fetches the whole assembly (NCBI Datasets);
@@ -51,14 +78,14 @@ command line, e.g. `--partition batch`.
    ```
    nextflow run workflow/main.nf -params-file config/params.yaml --tracks long
    ```
-   Simulated reads are saved in `data/reads/` with a `<sample>_spike<pct>_<short|long>.sim_hash` fingerprint of
+   Simulated reads are saved in `data/sim/reads/` with a `<sample>_spike<pct>_<short|long>.sim_hash` fingerprint of
    the settings that made them. With `reuse_reads: true` (default) a rerun reuses a set only when all of its files
    exist and the stored hash matches the current one; otherwise that set is simulated again and overwritten.
    The hash covers: the fungal and contaminant FASTAs (path, size, modification time), `contaminants.tsv`,
    `group_weights`, the spike level, `short_coverage`/`read_length`/`iss_model` (short) or
    `long_coverage`/`badread_args` (long), and the helper scripts that compute read counts and rename headers.
    It does not cover the simulator versions or the fixed seeds; set `reuse_reads: false` to force new reads.
-4. Every checkpoint is evaluated with QUAST, compleasm, BUSCO (`--miniprot`) and minimap2 against `data/references/combined/<sample>_with_contaminants.fa`
+4. Every checkpoint is evaluated with QUAST, compleasm, BUSCO (`--miniprot`) and minimap2 against `data/sim/references/combined/<sample>_with_contaminants.fa`
    (the sample genome plus all contaminants), which labels each contig fungal or contaminant by its best match.
 
 Outputs (`results/`):

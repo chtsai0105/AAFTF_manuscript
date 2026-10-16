@@ -1,8 +1,10 @@
 # pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
 samples:        config/samples.tsv
+real_samples:   config/real_samples.tsv   # real datasets; skipped when the file is missing or has no rows
 contaminants:   config/contaminants.tsv
 outdir:         results
-datadir:        data
+sim_dir:        data/sim           # simulated datasets: references/{fungus,contaminants,combined}, reads
+real_dir:       data/real          # real datasets: references (same strain), reads
 
 # SLURM partitions (slurm profile): default, and FCS-GX (~470 GB database in RAM)
 partition:       epyc
@@ -15,7 +17,7 @@ iss_model:      novaseq
 spike_levels:   "0,1,5,15"         # % of total reads from contaminants (0 = clean dataset)
 group_weights:  "bacteria:0.65,host:0.15,vector:0.1,fungal:0.1"
 tracks:         short              # comma list of short, long, hybrid (e.g. "long" or "short,long,hybrid")
-reuse_reads:    true               # reuse data/reads when their .sim_hash matches the current settings; false = always re-simulate
+reuse_reads:    true               # reuse data/sim/reads when their .sim_hash matches the current settings; false = always re-simulate
 long_coverage:  35
 badread_args:   "--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25"
 longread_type:  nano-hq            # flye read type for the simulated ONT reads

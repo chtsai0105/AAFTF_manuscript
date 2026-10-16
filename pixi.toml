@@ -51,6 +51,7 @@ badread = ">=0.4.1"            # ONT reads (depth= headers)
 
 # --- helper scripts ---
 pandas = ">=2"
+sra-tools = ">=3"              # fetch_reads.sh: fasterq-dump for real datasets
 curl = "*"
 unzip = "*"
 time = "*"                     # GNU time for workflow/scripts/timeit.sh
@@ -73,6 +74,7 @@ aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "9ce56a1" }
 
 [tasks]
 fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/samples.tsv" }
+fetch-real = { cmd = "workflow/scripts/fetch_samples.sh config/real_samples.tsv && workflow/scripts/fetch_reads.sh config/real_samples.tsv", description = "Download same-strain references and SRA reads in config/real_samples.tsv" }
 fetch-contaminants = { cmd = "workflow/scripts/fetch_contaminants.sh", description = "Download contaminant references in config/contaminants.tsv" }
 lint = { cmd = "nextflow lint workflow/main.nf workflow/nextflow.config", description = "Lint the Nextflow workflow" }
 benchmark = { cmd = "nextflow run workflow/main.nf -params-file config/params.yaml", description = "Run the benchmark; add e.g. -profile pixi,slurm -resume --tracks short,long" }

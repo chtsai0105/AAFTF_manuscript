@@ -25,15 +25,20 @@ All scripts, workflows, and outputs follow this layout (repository root):
 ├── README.md
 ├── pixi.toml / pixi.lock              # tool environments (default, eval, busco)
 ├── config/
-│   ├── samples.tsv                 # sample (NCBI organism name), reference, genome_size, phylum, taxid, lineage, mito_seed, accessions
+│   ├── samples.tsv                 # simulated samples: sample (NCBI organism name), reference, genome_size, phylum, taxid, lineage, mito_seed, accessions
+│   ├── real_samples.tsv            # real datasets: samples.tsv columns + read1, read2, longreads, longread_type, sra_short, sra_long
 │   ├── contaminants.tsv            # taxon (NCBI organism name), group, reference, accessions
 │   └── params.yaml                 # coverage, spike levels, group weights, tracks, partitions, ...
 ├── data/                           # not tracked in git
-│   ├── references/
-│   │   ├── fungus/                 # downloaded genomes; tagged copies with headers >FUNGUS_{seqid}
-│   │   ├── contaminants/           # downloaded genomes; tagged copies with headers >CONTAM_{taxon}_{seqid}
-│   │   └── combined/               # {sample}_with_contaminants.fa: sample + all contaminants, for minimap2 contig labelling
-│   └── reads/                      # simulated reads, composition tables and .sim_hash fingerprints
+│   ├── sim/                        # simulated datasets
+│   │   ├── references/
+│   │   │   ├── fungus/             # downloaded genomes; tagged copies with headers >FUNGUS_{seqid}
+│   │   │   ├── contaminants/       # downloaded genomes; tagged copies with headers >CONTAM_{taxon}_{seqid}
+│   │   │   └── combined/           # {sample}_with_contaminants.fa: sample + all contaminants, for minimap2 contig labelling
+│   │   └── reads/                  # simulated reads, composition tables and .sim_hash fingerprints
+│   └── real/                       # real datasets
+│       ├── references/             # same-strain reference genomes (+ tagged copies)
+│       └── reads/                  # sequenced reads (Illumina and/or ONT/PacBio)
 ├── workflow/
 │   ├── main.nf                     # Nextflow orchestration workflow
 │   ├── nextflow.config             # resources and profiles (slurm, pixi)
@@ -42,6 +47,7 @@ All scripts, workflows, and outputs follow this layout (repository root):
 │   └── scripts/
 │       ├── fetch_samples.sh                # download fungal references (samples.tsv)
 │       ├── fetch_contaminants.sh           # download contaminant references (contaminants.tsv)
+│       ├── fetch_reads.sh                  # download real reads from SRA (real_samples.tsv)
 │       ├── format_reference_headers.py     # FUNGUS_/CONTAM_ headers + depth= copy-number tags
 │       ├── make_readcounts.py              # exact InSilicoSeq read counts per sequence
 │       ├── make_long_quantities.py         # Badread quantity (bases) per contaminant
@@ -60,7 +66,7 @@ All scripts, workflows, and outputs follow this layout (repository root):
     └── read_composition.tsv        # realised fungal / contaminant amounts per dataset
 ```
 
-**Names.** Sample and contaminant names are the NCBI organism names (e.g. `Neurospora crassa OR74A`); file names and FASTA headers use a safe key with non-alphanumeric runs replaced by `_` (e.g. `Neurospora_crassa_OR74A`). Datasets are named `{sample}_spike{pct}_{track}`.
+**Names.** Sample and contaminant names are the NCBI organism names (e.g. `Neurospora crassa OR74A`); file names and FASTA headers use a safe key with non-alphanumeric runs replaced by `_` (e.g. `Neurospora_crassa_OR74A`). Datasets are named `{sample}_spike{pct}_{track}` (simulated) or `{sample}_real_{track}` (real reads).
 
 ---
 
@@ -80,9 +86,12 @@ Before simulating reads, every FASTA header is tagged to make downstream mapping
 * Contaminant reference FASTA (bacteria, host, vector, fungal cross-contaminant): rename to `^CONTAM_{TAXON}_.*`
 * Copy numbers are written as `depth=N` after the ID (read natively by Badread; used by `make_readcounts.py` for InSilicoSeq).
 * Combined FASTA (evaluation only, never used for assembly): concatenate tagged fungal and contaminant references:
-  `cat data/references/fungus/{sample}.fa data/references/contaminants/*.fa > data/references/combined/{sample}_with_contaminants.fa`
+  `cat data/sim/references/fungus/{sample}.fa data/sim/references/contaminants/*.fa > data/sim/references/combined/{sample}_with_contaminants.fa`
 
-### 3.2 Read Simulation
+### 3.2 Real Datasets
+Real runs of the exact strains with a reference genome are listed in `config/real_samples.tsv` (reference accessions as in `samples.tsv`, plus local read paths and SRA run accessions) and downloaded with `fetch_samples.sh config/real_samples.tsv` and `fetch_reads.sh`. The available reads decide the tracks (short: read1/read2; long: longreads; hybrid: both). Real datasets run the same checkpoints and the QUAST, completeness and timing evaluation; contaminant precision/recall (§5.3) needs the simulated answer key and is computed for simulated datasets only.
+
+### 3.3 Read Simulation
 
 #### Track A: Short-Read Simulation (`InSilicoSeq`)
 Paired-end NovaSeq reads (2 × 150 bp) at `short_coverage` (default 50×) on the fungus. Exact read counts per sequence (length × copy number) are given with `--readcount_file`; `iss --coverage` names a coverage distribution, not a depth.
@@ -91,7 +100,7 @@ make_readcounts.py --fungus {fungus.fa} --contam {contaminants} --coverage 50 --
 iss generate --genomes {fungus.fa} --readcount_file fungus.readcount.tsv --model novaseq \
   --output fungus --cpus {threads} --seed 42 --compress
 ```
-Output: `data/reads/{sample}_spike{pct}_R1.fastq.gz`, `_R2.fastq.gz`.
+Output: `data/sim/reads/{sample}_spike{pct}_R1.fastq.gz`, `_R2.fastq.gz`.
 
 #### Track B: Long-Read Simulation (`Badread`)
 ONT R10.4.1/Q20+-like reads at `long_coverage` (default 35×), settings in `badread_args`:
@@ -100,7 +109,7 @@ badread simulate --reference {fungus.fa} --quantity 35x \
   --length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 \
   --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25 --seed 42 | gzip > fungus_ont.fastq.gz
 ```
-Output: `data/reads/{sample}_spike{pct}_ont.fastq.gz`. All sequences are simulated as linear.
+Output: `data/sim/reads/{sample}_spike{pct}_ont.fastq.gz`. All sequences are simulated as linear.
 
 #### Track C: Synthetic Decontamination Spike-In Panel
 Contaminant reads are simulated from the tagged contaminant genomes and added to the fungal reads, so the fungal depth stays fixed:
@@ -167,7 +176,7 @@ Automated processes run four evaluation modules on every checkpoint FASTA:
 ### 5.1 Contiguity & Misassembly (`QUAST`)
 Reference-guided `quast.py` with fungal parameters, against the tagged fungal reference:
 ```bash
-quast.py -r data/references/fungus/{sample}.fa --fungus --threads {threads} \
+quast.py -r data/{sim,real}/references/.../{sample}.fa --fungus --threads {threads} \
   --output-dir results/02_quast/{dataset}__{checkpoint} {assembly_checkpoint.fasta}
 ```
 **Required Metrics to Extract (`transposed_report.tsv`, `contigs_reports/transposed_report_misassemblies.tsv`):**
@@ -197,10 +206,10 @@ busco -i {assembly_checkpoint.fasta} -m genome --miniprot -l {lineage_odb10} \
 * Missing (M%)
 
 ### 5.3 Decontamination Efficacy & Confusion Matrix (`minimap2`)
-Map the assembly contigs directly against `data/references/combined/{sample}_with_contaminants.fa` to establish contig taxonomy without BLAST:
+Map the assembly contigs of simulated datasets directly against `data/sim/references/combined/{sample}_with_contaminants.fa` to establish contig taxonomy without BLAST:
 ```bash
 minimap2 -x asm5 --secondary=no -t {threads} \
-  data/references/combined/{sample}_with_contaminants.fa \
+  data/sim/references/combined/{sample}_with_contaminants.fa \
   {assembly_checkpoint.fasta} > results/04_decontamination/paf/{dataset}__{checkpoint}.paf
 ```
 

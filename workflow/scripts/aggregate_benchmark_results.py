@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Combine QUAST, compleasm, BUSCO, decontamination and timing outputs into a tidy final_report.tsv.
 
-Output columns: dataset, sample, spike_pct, track, checkpoint, tool, metric, value
-Evaluation directories are named <dataset>__<checkpoint>; datasets are named <sample>_spike<pct>_<track> (track: short, long, hybrid).
+Output columns: dataset, sample, origin, spike_pct, track, checkpoint, tool, metric, value
+Evaluation directories are named <dataset>__<checkpoint>; datasets are named <sample>_spike<pct>_<track> (simulated) or <sample>_real_<track> (real reads);
+track: short, long, hybrid.
 """
 import argparse, glob, os, re
 import pandas as pd
@@ -65,8 +66,9 @@ for fn in a.times:
             add(r.dataset, r.checkpoint, 'time', f'{r.step}:{k}', r[k])
 
 out = pd.DataFrame(rows, columns=['dataset', 'checkpoint', 'tool', 'metric', 'value'])
-parts = out.dataset.str.extract(r'^(?P<sample>.+)_spike(?P<spike_pct>[\d.]+)_(?P<track>short|long|hybrid)$')
+parts = out.dataset.str.extract(r'^(?P<sample>.+)_(?:spike(?P<spike_pct>[\d.]+)|(?P<real>real))_(?P<track>short|long|hybrid)$')
 out.insert(1, 'sample', parts['sample'])
-out.insert(2, 'spike_pct', parts['spike_pct'])
-out.insert(3, 'track', parts['track'])
+out.insert(2, 'origin', parts['real'].notna().map({True: 'real', False: 'sim'}))
+out.insert(3, 'spike_pct', parts['spike_pct'])   # empty for real datasets
+out.insert(4, 'track', parts['track'])
 out.sort_values(['dataset', 'checkpoint', 'tool', 'metric']).to_csv(a.out, sep='\t', index=False)
