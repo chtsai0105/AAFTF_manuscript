@@ -1,0 +1,20 @@
+# Large inputs and outputs: regenerate with workflow/scripts/fetch_*.sh and the pipeline
+data/
+results/
+
+# Nextflow run state and intermediates
+work/
+.nextflow/
+.nextflow.log*
+timeline*.html
+report*.html
+trace*.txt
+dag*.html
+
+# pixi environments (recreate with `pixi install --all`; pixi.lock is tracked)
+.pixi/
+
+# Python / editor
+__pycache__/
+*.pyc
+.DS_Store

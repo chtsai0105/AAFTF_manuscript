@@ -1,0 +1,7 @@
+taxon	group	reference	accessions
+Ralstonia pickettii	bacteria	data/references/contaminants/Ralstonia_pickettii_K288.fa	NZ_CP066771.1,NZ_CP066772.2,NZ_CP066773.1
+Cutibacterium acnes subsp. acnes	bacteria	data/references/contaminants/Cutibacterium_acnes_NBRC107605.fa	NZ_AP019723.1
+Homo sapiens	host	data/references/contaminants/Homo_sapiens_chr21_mt.fa	NC_000021.9,NC_012920.1:200
+Escherichia phage phiX174	vector	data/references/contaminants/PhiX174.fa	NC_001422.1
+Cloning vector pUC19c	vector	data/references/contaminants/pUC19.fa	L09137.2
+Penicillium chrysogenum	fungal	data/references/contaminants/Penicillium_chrysogenum_P2niaD18_chrIV_mt.fa	CM002801.1,CM002802.1:30
