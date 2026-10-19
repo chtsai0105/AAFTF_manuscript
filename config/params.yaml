@@ -29,4 +29,6 @@ min_contig:     500
 fcs_gx_db:      null               # e.g. /dev/shm/gxdb/all; branch B is skipped when null
 
 # evaluation
-busco_downloads: null              # BUSCO --download_path (and compleasm -L)
+# OrthoDB v12.2 lineages (lineage column in samples.tsv, e.g. sordariomycetes_odb12.2)
+busco_downloads:   /srv/projects/db/BUSCO/v12.2                            # BUSCO --download_path, used with --offline (read-only OK)
+compleasm_library: /bigdata/stajichlab/ctsai085/databases/compleasm_odb12.2  # compleasm -L, writable; build with: pixi run setup-compleasm

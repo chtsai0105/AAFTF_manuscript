@@ -1,0 +1,2 @@
+organism	reference	accessions	genome_size	phylum	taxid	lineage	mito_seed
+Saccharomyces cerevisiae S288C	data/sim/references/fungus/Scer_S288C.fa	GCF_000146045.2,NC_001224.1:30	12100000	Ascomycota	4932	saccharomycetes_odb12.2	

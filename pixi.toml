@@ -15,6 +15,14 @@ platforms = ["linux-64"]
 #   pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
 # The `pixi` profile in workflow/nextflow.config activates `eval` for QUAST/COMPLEASM and `busco` for BUSCO.
 
+# AAFTF reference databases (`pixi run AAFTF database required taxpurge`), several GB.
+# Folders are searched in order; downloads go to the first writable one (the personal folder),
+# the shared lab folder is read-only. Set whenever the default environment is activated
+# (pixi run / shell / shell-hook, so also in Nextflow jobs with -profile pixi); an AAFTF_DB you
+# export yourself takes precedence.
+[activation.env]
+AAFTF_DB = "${AAFTF_DB:-/bigdata/stajichlab/ctsai085/databases/aaftf:/srv/projects/db/AAFTF_DB}"
+
 [dependencies]
 python = ">=3.13,<3.15"
 nextflow = "*"
@@ -61,7 +69,7 @@ quast = ">=5.2"
 compleasm = ">=0.2.6"
 
 [feature.busco.dependencies]
-busco = ">=5.5,<6"             # v5 as in the spec: -m genome --miniprot with odb10 lineages
+busco = ">=6.1,<7"              # v6 for OrthoDB v12.2 lineages (-m genome --miniprot)
 miniprot = "*"
 
 [environments]
@@ -76,5 +84,6 @@ aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "9ce56a1" }
 fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/samples.tsv" }
 fetch-real = { cmd = "workflow/scripts/fetch_samples.sh config/real_samples.tsv && workflow/scripts/fetch_reads.sh config/real_samples.tsv", description = "Download same-strain references and SRA reads in config/real_samples.tsv" }
 fetch-contaminants = { cmd = "workflow/scripts/fetch_contaminants.sh", description = "Download contaminant references in config/contaminants.tsv" }
+setup-compleasm = { cmd = "workflow/scripts/setup_compleasm_library.sh", description = "Symlink the BUSCO lineages (busco_downloads) into a writable compleasm library (compleasm_library)" }
 lint = { cmd = "nextflow lint workflow/main.nf workflow/nextflow.config", description = "Lint the Nextflow workflow" }
 benchmark = { cmd = "nextflow run workflow/main.nf -params-file config/params.yaml", description = "Run the benchmark; add e.g. -profile pixi,slurm -resume --tracks short,long" }

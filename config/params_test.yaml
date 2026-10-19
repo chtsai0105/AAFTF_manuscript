@@ -1,0 +1,36 @@
+# Small end-to-end test: one sample (S. cerevisiae, 12 Mb), one spike level, low coverage, all tracks.
+# Kept apart from the real benchmark (own sim_dir and outdir), so its reads and results never mix in.
+# pixi run nextflow run workflow/main.nf -params-file config/params_test.yaml -profile pixi,slurm
+samples:        config/test_samples.tsv   # S. cerevisiae only
+real_samples:   null
+contaminants:   config/contaminants.tsv
+outdir:         results_test
+sim_dir:        data/sim_test      # separate copy of references + test reads
+real_dir:       data/real          # real datasets: references (same strain), reads
+
+# SLURM partitions (slurm profile): default, and FCS-GX (~470 GB database in RAM)
+partition:       epyc
+fcsgx_partition: highmem
+
+# read simulation
+short_coverage: 20                 # low depth for a quick run
+read_length:    150
+iss_model:      novaseq
+spike_levels:   "5"
+group_weights:  "bacteria:0.65,host:0.15,vector:0.1,fungal:0.1"
+tracks:         short,long,hybrid
+reuse_reads:    true               # reuse data/sim/reads when their .sim_hash matches the current settings; false = always re-simulate
+long_coverage:  15
+badread_args:   "--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25"
+longread_type:  nano-hq            # flye read type for the simulated ONT reads
+
+# AAFTF
+trim_method:    bbduk
+filter_aligner: bbduk
+min_contig:     500
+fcs_gx_db:      null               # e.g. /dev/shm/gxdb/all; branch B is skipped when null
+
+# evaluation
+# OrthoDB v12.2 lineages (lineage column in samples.tsv, e.g. sordariomycetes_odb12.2)
+busco_downloads:   /srv/projects/db/BUSCO/v12.2                            # BUSCO --download_path, used with --offline (read-only OK)
+compleasm_library: /bigdata/stajichlab/ctsai085/databases/compleasm_odb12.2  # compleasm -L, writable; build with: pixi run setup-compleasm

@@ -79,9 +79,9 @@ References are listed in the TSVs with NCBI accessions and downloaded by `fetch_
 
 | organism (NCBI organism name) | assembly | phylum | BUSCO lineage |
 |---|---|---|---|
-| *Neurospora crassa* OR74A | GCF_000182925.2 (incl. mito NC_026614.1) | Ascomycota | sordariomycetes_odb10 |
-| *Saccharomyces cerevisiae* S288C | GCF_000146045.2 (incl. mito NC_001224.1) | Ascomycota | saccharomycetes_odb10 |
-| *Cryptococcus neoformans* H99 | GCF_000149245.1 (incl. mito NC_018792.1) | Basidiomycota | tremellomycetes_odb10 |
+| *Neurospora crassa* OR74A | GCF_000182925.2 (incl. mito NC_026614.1) | Ascomycota | sordariomycetes_odb12.2 |
+| *Saccharomyces cerevisiae* S288C | GCF_000146045.2 (incl. mito NC_001224.1) | Ascomycota | saccharomycetes_odb12.2 |
+| *Cryptococcus neoformans* H99 | GCF_000149245.1 (incl. mito NC_018792.1) | Basidiomycota | tremellomycetes_odb12.2 |
 
 Before simulating reads, every FASTA header is tagged to make downstream mapping and decontamination evaluation deterministic:
 * Fungal reference FASTA: rename all sequences to `^FUNGUS_.*`
@@ -190,16 +190,17 @@ quast.py -r data/{sim,real}/references/.../{sample}.fa --fungus --threads {threa
 * `Unaligned length`
 
 ### 5.2 Biological Completeness (`compleasm` & `BUSCO`)
-Both tools in direct nucleotide mode against the sample's lineage dataset:
+Both tools in direct nucleotide mode against the sample's OrthoDB v12.2 lineage dataset, using the same lineage files: BUSCO reads the shared download folder (`busco_downloads`, read-only, `--offline`), and compleasm a writable library (`compleasm_library`) whose lineage folders are symlinks into it (`pixi run setup-compleasm`).
 
 ```bash
-# Tool 1: compleasm (miniprot mode); lineage name without the _odb10 suffix
+# Tool 1: compleasm (miniprot mode); lineage name without suffix, OrthoDB version from it
 compleasm run -a {assembly_checkpoint.fasta} -o results/03_completeness/compleasm/{dataset}__{checkpoint} \
-  -l {lineage} -t {threads} [-L {busco_downloads}]
+  -l {lineage} --odb odb12.2 -t {threads} -L {compleasm_library}
 
-# Tool 2: BUSCO v5 (genome mode, miniprot engine)
-busco -i {assembly_checkpoint.fasta} -m genome --miniprot -l {lineage_odb10} \
-  -o {dataset}__{checkpoint} --out_path results/03_completeness/busco --cpu {threads} [--download_path {busco_downloads}]
+# Tool 2: BUSCO v6 (genome mode, miniprot engine)
+busco -i {assembly_checkpoint.fasta} -m genome --miniprot -l {lineage}_odb12.2 \
+  -o {dataset}__{checkpoint} --out_path results/03_completeness/busco --cpu {threads} \
+  --download_path {busco_downloads} --offline
 ```
 **Required Metrics to Extract:**
 * Complete Single-Copy (S%)
@@ -245,4 +246,4 @@ Every assembler and AAFTF command is wrapped in GNU `/usr/bin/time -v` (`timeit.
 1. **Nextflow workflow (`workflow/main.nf`)** that parameterizes the ablation checkpoints, the three tracks and the evaluation steps across all samples and spike levels, with `slurm` (partition `epyc`; FCS-GX on `highmem`) and `pixi` profiles.
 2. **`calculate_decon_metrics.py`** in Python using `pandas` to process the PAF files and emit `precision_recall_f1.tsv`.
 3. **`aggregate_benchmark_results.py`** to combine QUAST `transposed_report.tsv`, compleasm/BUSCO summary files, decontamination metrics and execution times into a single tidy `final_report.tsv` (`dataset, sample, spike_pct, track, checkpoint, tool, metric, value`) suitable for plotting in R (`ggplot2`) or Python (`seaborn`).
-4. **`pixi.toml` + `pixi.lock`** with pinned versions of `aaftf`, `insilicoseq`, `badread`, `quast`, `compleasm`, `busco`, `minimap2`, `samtools` and the AAFTF tool chain, split into three environments (`default`, `eval`, `busco`) because they cannot be solved together.
+4. **`pixi.toml` + `pixi.lock`** with pinned versions of `aaftf`, `insilicoseq`, `badread`, `quast`, `compleasm`, `busco` (v6), `minimap2`, `samtools` and the AAFTF tool chain, split into three environments (`default`, `eval`, `busco`) because they cannot be solved together.

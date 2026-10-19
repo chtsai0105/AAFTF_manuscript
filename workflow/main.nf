@@ -46,7 +46,9 @@ params.trim_method = 'bbduk'
 params.filter_aligner = 'bbduk'
 params.min_contig = 500
 params.fcs_gx_db = null
+// BUSCO download folder (read-only is fine) and compleasm library (writable; lineage folders may be symlinks)
 params.busco_downloads = null
+params.compleasm_library = null
 
 // (sample, spike level) links the short, long and hybrid datasets built from the same simulation
 // file/header-safe key for an NCBI organism name (contaminant taxa and sample names), e.g. 'Cutibacterium acnes subsp. acnes' -> 'Cutibacterium_acnes_subsp_acnes'
@@ -492,9 +494,12 @@ process COMPLEASM {
     path "${meta.id}__${cp}"
 
     script:
-    def lib = params.busco_downloads ? "-L ${params.busco_downloads}" : ''
+    // writable library (compleasm updates file_versions.tsv on every run); see workflow/scripts/setup_compleasm_library.sh
+    def lib = params.compleasm_library ? "-L ${params.compleasm_library}" : ''
+    // same OrthoDB version as BUSCO (compleasm defaults to odb12): taken from the lineage suffix, e.g. _odb12.2
+    def odb = (meta.lineage =~ /_(odb[\d.]+)$/) ? (meta.lineage =~ /_(odb[\d.]+)$/)[0][1] : 'odb12.2'
     """
-    compleasm run -a ${asm} -o ${meta.id}__${cp} -l ${meta.lineage.replaceAll('_odb\\d+$', '')} -t ${task.cpus} ${lib}
+    compleasm run -a ${asm} -o ${meta.id}__${cp} -l ${meta.lineage.replaceAll('_odb[\\d.]+$', '')} --odb ${odb} -t ${task.cpus} ${lib}
     """
 }
 
@@ -509,7 +514,8 @@ process BUSCO {
     path "${meta.id}__${cp}"
 
     script:
-    def dl = params.busco_downloads ? "--download_path ${params.busco_downloads}" : ''
+    // shared, read-only BUSCO download folder (<dir>/lineages/<lineage>); --offline: never download or write there
+    def dl = params.busco_downloads ? "--download_path ${params.busco_downloads} --offline" : ''
     """
     busco -i ${asm} -m genome --miniprot -l ${meta.lineage} -o ${meta.id}__${cp} --out_path . \\
         --cpu ${task.cpus} ${dl}

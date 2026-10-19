@@ -4,6 +4,8 @@ Implements [aaftf_benchmark_specification.md](aaftf_benchmark_specification.md) 
 
 ```
 pixi install --all                       # tools: see pixi.toml (environments default, eval, busco)
+pixi run AAFTF database required taxpurge  # AAFTF databases (AAFTF_DB in pixi.toml; export your own to override)
+pixi run setup-compleasm                 # compleasm library: symlinks to the BUSCO odb12.2 lineages (busco_downloads)
 pixi run fetch-samples && pixi run fetch-contaminants
 pixi run fetch-real                      # optional: real datasets in config/real_samples.tsv
 pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
@@ -34,7 +36,7 @@ needs the simulated answer key. In `final_report.tsv`, `origin` is `real` and `s
 
 Example row (tab-separated):
 ```
-Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_026614.1:30  41100000  Ascomycota  5141  sordariomycetes_odb10    data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
+Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_026614.1:30  41100000  Ascomycota  5141  sordariomycetes_odb12.2    data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
 ```
 
 ## Steps

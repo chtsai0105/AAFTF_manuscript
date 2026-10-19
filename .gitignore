@@ -1,6 +1,7 @@
 # Large inputs and outputs: regenerate with workflow/scripts/fetch_*.sh and the pipeline
 data/
 results/
+results_test/
 
 # Nextflow run state and intermediates
 work/

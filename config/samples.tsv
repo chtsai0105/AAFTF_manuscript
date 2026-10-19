@@ -1,4 +1,4 @@
 organism	reference	accessions	genome_size	phylum	taxid	lineage	mito_seed
-Neurospora crassa OR74A	data/sim/references/fungus/Ncra_OR74A.fa	GCF_000182925.2,NC_026614.1:30	41100000	Ascomycota	5141	sordariomycetes_odb10	
-Saccharomyces cerevisiae S288C	data/sim/references/fungus/Scer_S288C.fa	GCF_000146045.2,NC_001224.1:30	12100000	Ascomycota	4932	saccharomycetes_odb10	
-Cryptococcus neoformans H99	data/sim/references/fungus/Cneo_H99.fa	GCF_000149245.1,NC_018792.1:30	18900000	Basidiomycota	235443	tremellomycetes_odb10	
+Saccharomyces cerevisiae S288C	data/sim/references/fungus/Scer_S288C.fa	GCF_000146045.2,NC_001224.1:30	12100000	Ascomycota	4932	saccharomycetes_odb12.2	
+Neurospora crassa OR74A	data/sim/references/fungus/Ncra_OR74A.fa	GCF_000182925.2,NC_026614.1:30	41100000	Ascomycota	5141	sordariomycetes_odb12.2	
+Cryptococcus neoformans H99	data/sim/references/fungus/Cneo_H99.fa	GCF_000149245.1,NC_018792.1:30	18900000	Basidiomycota	235443	tremellomycetes_odb12.2	
