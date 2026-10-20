@@ -1,113 +1,122 @@
-# AAFTF internal benchmarking suite
+[![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A526.04-23aa62.svg?labelColor=000000)](https://www.nextflow.io/)
+[![pixi](https://img.shields.io/badge/pixi-environments-yellow.svg?labelColor=000000)](https://pixi.sh/)
 
-Implements [aaftf_benchmark_specification.md](aaftf_benchmark_specification.md) in Nextflow.
+# AAFTF Benchmarking Workflow
 
+A Nextflow workflow that measures what each step of [AAFTF](https://github.com/stajichlab/AAFTF) adds to a fungal
+genome assembly. Reads are simulated from finished reference genomes with a known amount of contamination, so every
+step can be scored against the truth. The full design is in [aaftf_benchmark_specification.md](aaftf_benchmark_specification.md).
+
+1. Tag the fungal and contaminant reference genomes (`FUNGUS_*` / `CONTAM_*` headers) and build one combined FASTA
+   per sample (sample + all contaminants).
+2. Simulate reads with 0, 1, 5 and 15% contaminant reads: Illumina with InSilicoSeq, ONT with Badread.
+3. Assemble and clean up with AAFTF, saving the assembly after every step (checkpoint), on up to three tracks:
+   - **short** (Illumina): raw SPAdes baseline, then trim/mito/filter → SPAdes → vecscreen → taxpurge → covpurge → rmdup
+   - **long** (ONT): Flye → vecscreen → taxpurge → rmdup → Racon polishing
+   - **hybrid** (ONT + Illumina): Flye → vecscreen → taxpurge (shared with long) → covpurge → rmdup → Racon + Polypolish
+4. Evaluate every checkpoint: QUAST (contiguity, misassemblies), BUSCO (completeness), and the share of contaminant
+   sequence removed by each purge step (precision / recall).
+5. Collect everything into one table, `results/final_report.tsv`.
+
+```mermaid
+flowchart TB
+  refs["Reference genomes<br/>fungal samples + contaminant panel"]
+  tag(["TAG_FUNGAL_REF / TAG_CONTAM_REF / BUILD_COMBINED_REF"])
+  refs --> tag
+
+  tag --> simI(["SIMULATE_ILLUMINA<br/>0 / 1 / 5 / 15 % contaminants"])
+  tag --> simO(["SIMULATE_ONT_FUNGUS → SIMULATE_ONT_SPIKE"])
+
+  simI --> cp00(["CP00_RAW_BASELINE<br/>SPAdes on raw reads"])
+  simI --> clean(["CLEAN_READS<br/>trim → mito → filter"])
+  clean --> cp01s(["CP01_SPADES_ASM"])
+  simO --> cp01l(["CP01_FLYE_ASM"])
+
+  cp01s --> cp02(["CP02_VECSCREEN"])
+  cp01l --> cp02
+  cp02 --> cp03(["CP03_TAXPURGE<br/>(CP03_FCSGX optional)"])
+  cp03 -->|short, hybrid| cp04(["CP04_COVPURGE"])
+  cp03 -->|long| cp05(["CP05_RMDUP"])
+  cp04 --> cp05
+  cp05 -->|long, hybrid| cp06(["CP06_POLISH<br/>Racon (+ Polypolish for hybrid)"])
+
+  cp00 & cp01s & cp01l & cp02 & cp03 & cp04 & cp05 & cp06 --> eval
+  subgraph eval["Evaluation of every checkpoint"]
+    direction TB
+    quast(["QUAST"])
+    busco(["BUSCO"])
+    decon(["MAP_TO_COMBINED_REF → DECON_METRICS"])
+    dot(["DOTPLOT_PAF"])
+  end
+  eval --> agg(["AGGREGATE_RESULTS<br/>final_report.tsv"])
 ```
-pixi install --all                       # tools: see pixi.toml (environments default, eval, busco)
-pixi run AAFTF database required taxpurge  # AAFTF databases (AAFTF_DB in pixi.toml; export your own to override)
-pixi run fetch-samples && pixi run fetch-contaminants
-pixi run fetch-real                      # optional: real datasets in config/real_samples.tsv
-pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
+
+### Installation
+
+All tools are installed with [pixi](https://pixi.sh/) into three environments (`default`, `eval` for QUAST, `busco`
+for BUSCO), defined in `pixi.toml` and pinned in `pixi.lock`.
+
+```bash
+pixi install --all
+pixi run AAFTF database required taxpurge   # AAFTF databases, stored in AAFTF_DB (set in pixi.toml)
 ```
 
-With `-profile slurm`, jobs go to the `partition` set in `config/params.yaml` (default `epyc`), and FCS-GX
-(`CP03_FCSGX`, ~470 GB database in RAM) goes to `fcsgx_partition` (default `highmem`). Override either on the
-command line, e.g. `--partition batch`.
+BUSCO lineages are read from `busco_downloads` in `config/params.yaml` (`/srv/projects/db/BUSCO/v12.2`).
 
-## Data layout
+### Usage
 
-```
-data/sim/references/{fungus,contaminants,combined}/   simulated datasets: references
-data/sim/reads/                                      simulated reads (+ composition, .sim_hash)
-data/real/references/                                real datasets: same-strain reference genomes
-data/real/reads/                                     real sequencing reads
-```
-
-## Real datasets
-
-`config/real_samples.tsv` lists real runs whose exact strain has a reference genome. Columns are those of
-`sim_samples.tsv` (`organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed`) plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
-`sra_short` / `sra_long` (SRA run accessions, comma-separated). `pixi run fetch-real` downloads the references
-(`fetch_samples.sh`) and reads (`fetch_reads.sh`, sra-tools). Tracks are taken from the reads present: short
-(read1/read2), long (longreads), hybrid (both). Datasets are named `<sample>_real_<track>`; they go through the
-same checkpoints and QUAST / BUSCO / timing, but not the decontamination precision/recall, which
-needs the simulated answer key. In `final_report.tsv`, `origin` is `real` and `spike_pct` is empty.
-
-Example row (tab-separated):
-```
-Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_026614.1:30  41100000  Ascomycota  5141  sordariomycetes_odb12.2    data/real/reads/Ncra_R1.fastq.gz  data/real/reads/Ncra_R2.fastq.gz  data/real/reads/Ncra_ont.fastq.gz  nano-hq  SRRxxxxxxx  SRRyyyyyyy
-```
-
-## Steps
-
-1. Fungal references are defined in `config/sim_samples.tsv`; `workflow/scripts/fetch_samples.sh` downloads each row's
-   `accessions` into its `reference` path. A `GCF_`/`GCA_` accession fetches the whole assembly (NCBI Datasets);
-   other accessions fetch single sequences, e.g. a mitogenome missing from the assembly (skipped when the assembly
-   already has it). `acc:copies` sets a copy number as for contaminants: the mitochondria are at a placeholder 50.
-   Both fetch scripts skip existing files; `--force` re-downloads. The contaminant panel is defined in `config/contaminants.tsv`
-   (`organism, reference, accessions, group, assembly`; `assembly` is the source NCBI assembly, for reference only); `workflow/scripts/fetch_contaminants.sh` downloads each row's NCBI
-   nuccore accessions into its `reference` path (~57 Mb: *Ralstonia pickettii*, *Cutibacterium acnes*, human chr21 + mito,
-   PhiX, pUC19, *Penicillium chrysogenum* chr IV + mito). No plant host: the samples are pure-culture lab strains, so
-   plant DNA would only be realistic for a plant pathogen sequenced from host tissue.
-   Edit the TSV to change the panel; rows without accessions must point to a local FASTA.
-   Eukaryotic contaminants carry their organelles in the same row (human chr21 + mitochondrion; *Penicillium*
-   chr IV + mitochondrion), because within one organism the nuclear:organelle read ratio is set by
-   biology, not by the scenario. An accession can carry a copy number per nuclear genome as `acc:copies`
-   (default 1), e.g. `NC_000021.9,NC_012920.1:200`. It is written as `depth=` in the FASTA
-   header; Badread reads it natively and `make_readcounts.py` scales InSilicoSeq read counts by it.
-   **The current copy numbers (human mito 200, fungal mitos 50) are placeholders**;
-   replace them with organelle:nuclear depth ratios measured from real WGS data before the final run.
-   All sequences are simulated as linear (no reads span a circular genome's origin).
-   The fungal cross-contaminant (*Penicillium chrysogenum* P2niaD18 chr IV + mitochondrion) is in the same phylum
-   (Ascomycota, different class) as *N. crassa* and *S. cerevisiae*, and a different phylum from *C. neoformans*.
-   `taxpurge -p <phylum>` keeps every contig of the sample's phylum, so it is expected to miss this contaminant in
-   the Ascomycota samples; this tests the limit of phylum-level purging against FCS-GX.
-   The headers are rewritten to `FUNGUS_*` / `CONTAM_<taxon>_*` automatically.
-2. Reads are simulated with InSilicoSeq at 0/1/5/15% contaminant reads, split 65/15/10/10 between bacteria, host (human), vector and a fungal cross-contaminant (`group_weights`).
-   Exact read counts per sequence go through `--readcount_file`; the realised mix is written to `results/read_composition.tsv`.
-3. Ablation checkpoints: cp00 raw SPAdes, cp01 assembly, cp02 vecscreen, cp03 taxpurge (branch A) / `fcs_gx_purge`
-   (branch B, when `fcs_gx_db` is set), cp04 covpurge (short, hybrid), cp05 rmdup, cp06 polish (long, hybrid).
-   Short: cp00–cp05; long: cp01–cp03, cp05, cp06; hybrid: cp04–cp06 (cp01–cp03 shared with long).
-   The short track does not polish (as `AAFTF pipeline_short`); `AAFTF sort` is
-   not benchmarked, since it only renames and reorders contigs. Identical assemblies are evaluated once
-   (`same_sequences_as` rows in `final_report.tsv`).
-   `tracks` (params.yaml or `--tracks`) picks what runs, as a comma list:
-   - `short` (default): the six checkpoints above
-   - `long`: Badread ONT reads → `cp01_flye_asm` (AAFTF assemble --method flye) → cp02, cp03 → cp05 rmdup → cp06 racon
-   - `hybrid`: cp01–cp03 shared with `long`; then cp04 covpurge and cp05 rmdup with cleaned Illumina reads,
-     cp06 = racon, then polypolish
-   `long` and `hybrid` share one flye assembly, vecscreen and purge (labelled `<sample>_spike<pct>_long`).
-   Illumina reads are only simulated when `short` or `hybrid` is chosen; with `hybrid` but not `short`, they are
-   cleaned (trim/mito/filter) but not assembled. No cp00 for long reads: a raw flye run would equal cp01.
-   Long contaminant reads use the same % (by bases) and group weights.
-
+1. Describe the inputs (tab-separated):
+   - `config/sim_samples.tsv`: fungal samples (organism, reference path, NCBI accessions, genome size, phylum, taxid,
+     BUSCO lineage)
+   - `config/contaminants.tsv`: contaminant panel (organism, reference path, NCBI accessions, group)
+   - `config/real_samples.tsv` (optional): real sequencing runs of the same strains, with read paths or SRA accessions
+2. Download the reference genomes (and real reads, if any):
+   ```bash
+   pixi run fetch-samples
+   pixi run fetch-contaminants
+   pixi run fetch-real            # optional
    ```
-   nextflow run workflow/main.nf -params-file config/params.yaml --tracks long
+3. Set the run parameters in `config/params.yaml` (coverage, spike levels, tracks, SLURM partitions, ...).
+4. Run a small test first (one sample, 5% contamination, all tracks):
+   ```bash
+   pixi run nextflow run workflow/main.nf -params-file config/params_test.yaml -profile pixi,slurm
    ```
-   Simulated reads are saved in `data/sim/reads/` with a `<sample>_spike<pct>_<short|long>.sim_hash` fingerprint of
-   the settings that made them. With `reuse_reads: true` (default) a rerun reuses a set only when all of its files
-   exist and the stored hash matches the current one; otherwise that set is simulated again and overwritten.
-   The hash covers: the fungal and contaminant FASTAs (path, size, modification time), `contaminants.tsv`,
-   `group_weights`, the spike level, `short_coverage`/`read_length`/`iss_model` (short) or
-   `long_coverage`/`badread_args` (long), and the helper scripts that compute read counts and rename headers.
-   It does not cover the simulator versions or the fixed seeds; set `reuse_reads: false` to force new reads.
-4. Every checkpoint is evaluated with QUAST, BUSCO (`--miniprot`) and minimap2 against `data/sim/references/combined/<sample>_with_contaminants.fa`
-   (the sample genome plus all contaminants), which labels each contig fungal or contaminant by its best match.
+5. Run the full benchmark:
+   ```bash
+   pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm --tracks short,long,hybrid
+   ```
+   or add `-resume` to continue a run.
 
-Outputs (`results/`):
-- `01_checkpoints/<dataset>/`: the assembly FASTA saved after every ablation step
-- `final_report.tsv`: tidy long table (`dataset, sample, spike_pct, track, checkpoint, tool, metric, value`); datasets are `<sample>_spike<pct>_<track>`
-- `precision_recall_f1.tsv`: contig composition for every checkpoint, plus TP/FN/FP/TN, precision, recall and F1 for cp02 → cp03
-- `time_summary.tsv`: wall time, peak RSS, CPU % and exit status for every AAFTF / SPAdes call
-- `02_quast/`, `03_completeness/`, `04_decontamination/`: raw tool outputs
-- `05_dotplots/<dataset>__<checkpoint>.{paf,target.idx,query.idx}`: minimap2 alignment of each checkpoint (query)
-  to the sample's reference (target), for interactive dot plots in D-GENIES ("Plot alignment": upload the PAF and
-  the two `.idx` files). D-GENIES runs as a web app, e.g. locally with `pixi exec -s dgenies dgenies run -m standalone`
+Run Nextflow itself as a SLURM job, e.g.
+`sbatch -p epyc -c 2 --mem 8G -t 2-00:00:00 --wrap "pixi run nextflow run ... -resume"`.
+Jobs go to the `partition` in `config/params.yaml` (default `epyc`); FCS-GX goes to `fcsgx_partition` (`highmem`).
 
-## Differences from the spec (current AAFTF CLI)
-- Reads use `-1/-2` (not `-l/-r`). trim writes `_1P/_2P.fastq.gz`; filter writes `_filtered_1/2.fastq.gz`.
-- `filter --aligner bbmap` is not a valid choice, so `bbduk` is the default (`filter_aligner`).
-- `sourpurge` is now `taxpurge`, which needs `-p <phylum>` from sim_samples.tsv.
-- `fcs_gx_purge` needs `-d <db> -t <taxid>` and writes into an output directory.
-- `mito` output is passed to `filter -s` to screen mitochondrial reads. If NOVOPlasty fails (for example, the reference has no mitogenome), the run continues without it.
-- `iss --coverage 50` is a distribution name in InSilicoSeq, not a depth; depth is set with `--readcount_file`.
+### Outputs
+
+| path | content |
+|---|---|
+| `results/final_report.tsv` | one row per dataset × checkpoint × metric (`dataset, sample, origin, spike_pct, track, checkpoint, tool, metric, value`) |
+| `results/precision_recall_f1.tsv` | contig composition of every checkpoint; precision / recall / F1 for the purge steps (cp03, cp04) |
+| `results/time_summary.tsv` | run time, peak memory and exit status of every assembler / AAFTF command |
+| `results/read_composition.tsv` | the actual fungal / contaminant amounts in each simulated read set |
+| `results/01_checkpoints/` | the assembly after every step |
+| `results/02_quast/`, `03_completeness/`, `04_decontamination/` | raw QUAST, BUSCO and minimap2 outputs |
+| `results/05_dotplots/` | PAF + index files per checkpoint for interactive dot plots in [D-GENIES](https://dgenies.toulouse.inra.fr/) ("Plot alignment") |
+
+Datasets are named `<sample>_spike<pct>_<track>` (simulated) or `<sample>_real_<track>` (real).
+
+### Notes
+
+- **Checkpoints.** cp00 raw SPAdes, cp01 assembly, cp02 vecscreen, cp03 taxpurge (or `fcs_gx_purge` when `fcs_gx_db`
+  is set), cp04 covpurge, cp05 rmdup, cp06 polishing. A number always means the same step; tracks skip steps they
+  cannot run (no cp04 without Illumina reads, no polishing on the short track, as in `AAFTF pipeline_short`).
+- **Contaminants.** Bacteria (*Ralstonia pickettii*, *Cutibacterium acnes*), human (chr21 + mitochondrion), vectors
+  (PhiX, pUC19) and a fungal cross-contaminant (*Penicillium chrysogenum* chr IV + mitochondrion), mixed 65 / 15 / 10 / 10 %.
+  An accession written as `acc:N` is simulated at N copies per nuclear genome (e.g. mitochondria). The current copy
+  numbers (fungal mitochondria 30, human mitochondrion 200) are placeholders.
+- **Reusing reads.** Simulated reads are kept in `data/sim/reads/` with a fingerprint of the settings that made them, and
+  reused on later runs while the settings are unchanged (`reuse_reads`).
+- **Real datasets** run the same checkpoints and QUAST / BUSCO, but get no precision / recall: there is no answer key
+  for which contigs are contaminants.
+- **Shared evaluation.** Checkpoints with identical sequences (e.g. a step that removed nothing) are evaluated once; the
+  report marks them with `same_sequences_as`.
