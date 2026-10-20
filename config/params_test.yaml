@@ -1,7 +1,7 @@
 # Small end-to-end test: one sample (S. cerevisiae, 12 Mb), one spike level, low coverage, all tracks.
 # Kept apart from the real benchmark (own sim_dir and outdir), so its reads and results never mix in.
 # pixi run nextflow run workflow/main.nf -params-file config/params_test.yaml -profile pixi,slurm
-samples:        config/test_samples.tsv   # S. cerevisiae only
+sim_samples:    config/test_samples.tsv   # S. cerevisiae only
 real_samples:   null
 contaminants:   config/contaminants.tsv
 outdir:         results_test
@@ -32,6 +32,5 @@ covpurge_mincovpct: 5               # covpurge: drop contigs below this % of the
 fcs_gx_db:      null               # e.g. /dev/shm/gxdb/all; branch B is skipped when null
 
 # evaluation
-# OrthoDB v12.2 lineages (lineage column in samples.tsv, e.g. sordariomycetes_odb12.2)
-busco_downloads:   /srv/projects/db/BUSCO/v12.2                            # BUSCO --download_path, used with --offline (read-only OK)
-compleasm_library: /bigdata/stajichlab/ctsai085/databases/compleasm_odb12.2  # compleasm -L, writable; build with: pixi run setup-compleasm
+# OrthoDB v12.2 lineages (lineage column in sim_samples.tsv, e.g. sordariomycetes_odb12.2)
+busco_downloads: /srv/projects/db/BUSCO/v12.2   # BUSCO --download_path, used with --offline (read-only OK)

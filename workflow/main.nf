@@ -7,7 +7,7 @@
  *   2. Simulate reads at 0/1/5/15% contaminant spike-in: InSilicoSeq Illumina and/or Badread ONT (as --tracks needs)
  *   3. Ablation checkpoints per dataset (track 'short'):
  *        cp00_raw_baseline        spades.py --isolate on raw reads
- *        cp01_mito_filtered_asm   AAFTF trim → mito → filter → assemble
+ *        cp01_spades_asm          AAFTF trim → mito → filter (CLEAN_READS), then assemble with SPAdes
  *        cp02_vecscreen           AAFTF vecscreen
  *        cp03_purged_{taxpurge,fcsgx}   branch A: AAFTF taxpurge | branch B: AAFTF fcs_gx_purge
  *        cp04_covpurge_{branch}   AAFTF covpurge (filtered Illumina reads)
@@ -16,13 +16,14 @@
  *        long:   cp01 flye → cp02 vecscreen → cp03 purge → cp05 rmdup → cp06 polish (racon); no cp04 (no Illumina reads)
  *        hybrid: cp01-cp03 shared with 'long'; then cp04 covpurge and cp05 rmdup with its own Illumina reads,
  *                cp06 = racon, then polypolish with the filtered Illumina reads of the same dataset
- *   4. Evaluate every checkpoint: QUAST, compleasm, BUSCO (miniprot), minimap2 vs the combined FASTA
+ *   4. Evaluate every checkpoint: QUAST, BUSCO (miniprot), minimap2 vs the combined FASTA,
+ *      minimap2 PAF vs the reference for D-GENIES dot plots
  *   5. Aggregate into results/final_report.tsv
  * Every AAFTF / assembler call is wrapped in GNU time (scripts/timeit.sh).
  */
 nextflow.enable.dsl = 2
 
-params.samples = 'config/samples.tsv'
+params.sim_samples = 'config/sim_samples.tsv'
 params.contaminants = 'config/contaminants.tsv'
 params.outdir = 'results'
 // simulated datasets (references, reads) and real datasets (same-strain references, sequenced reads)
@@ -48,25 +49,24 @@ params.min_contig = 500
 // covpurge: remove contigs below this % of the N50 contigs' mean coverage (AAFTF default 5)
 params.covpurge_mincovpct = 5
 params.fcs_gx_db = null
-// BUSCO download folder (read-only is fine) and compleasm library (writable; lineage folders may be symlinks)
+// BUSCO download folder (<dir>/lineages/<lineage>; read-only is fine, used with --offline)
 params.busco_downloads = null
-params.compleasm_library = null
 
 // (sample, spike level) links the short, long and hybrid datasets built from the same simulation
 // file/header-safe key for an NCBI organism name (contaminant taxa and sample names), e.g. 'Cutibacterium acnes subsp. acnes' -> 'Cutibacterium_acnes_subsp_acnes'
-def taxonKey(name) {
+def safeKey(name) {
     name.trim().replaceAll(/[^A-Za-z0-9]+/, '_').replaceAll(/^_|_$/, '')
 }
 
-// one meta map + reference per row of samples.tsv (origin 'sim') or real_samples.tsv (origin 'real')
+// one meta map + reference per row of sim_samples.tsv (origin 'sim') or real_samples.tsv (origin 'real')
 def optFile(x) {
     x ? file(x) : null
 }
 
 def sampleRow(r, origin) {
     def meta = [
-        sample: taxonKey(r.organism), name: r.organism, origin: origin, genome_size: r.genome_size, phylum: r.phylum,
-        taxid: r.taxid, lineage: r.lineage, mito_seed: optFile(r.mito_seed), reference: r.reference,
+        sample: safeKey(r.organism), name: r.organism, origin: origin, genome_size: r.genome_size, phylum: r.phylum,
+        taxid: r.taxid, lineage: r.lineage, mito_seed: optFile(r.mito_seed), source_reference: r.reference,
         accessions: r.accessions ?: '', read1: optFile(r.read1), read2: optFile(r.read2), longreads: optFile(r.longreads), longread_type: r.longread_type ?: null,
     ]
     tuple(meta, file(r.reference))
@@ -79,10 +79,10 @@ def seqFingerprint(f) {
     digests.sort().join(',').md5()
 }
 
-def datasetKey(m) {
-    [m.sample, m.pct]
+def trackLinkKey(m) {
+    [m.sample, m.spike_pct]
 }
-def asHybrid(m) {
+def toHybridMeta(m) {
     m + [id: m.id.replaceAll('_long$', '_hybrid'), track: 'hybrid']
 }
 
@@ -99,7 +99,7 @@ def simHash(m, pct, kind) {
     def lines = file(params.contaminants).readLines().findAll { l -> l.trim() }
     def ref_col = lines[0].split('\t', -1).toList().indexOf('reference')
     def contam_refs = lines.drop(1).collect { l -> l.split('\t', -1)[ref_col] }
-    def parts = [kind, pct, fileSig(m.reference), fileSig(params.contaminants)] + contam_refs.collect { f -> fileSig(f) } + [params.group_weights, file("${projectDir}/scripts/format_reference_headers.py").text]
+    def parts = [kind, pct, fileSig(m.source_reference), fileSig(params.contaminants)] + contam_refs.collect { f -> fileSig(f) } + [params.group_weights, file("${projectDir}/scripts/format_reference_headers.py").text]
     parts += kind == 'short'
         ? [params.short_coverage, params.read_length, params.iss_model, file("${projectDir}/scripts/make_readcounts.py").text]
         : [params.long_coverage, params.badread_args, file("${projectDir}/scripts/make_long_quantities.py").text]
@@ -108,7 +108,7 @@ def simHash(m, pct, kind) {
 
 // previously simulated files for a sample × spike level ('short' or 'long'); [] unless all exist
 // and were made with the same settings (matching .sim_hash)
-def existingReads(m, pct, kind) {
+def reusableReads(m, pct, kind) {
     def d = "${params.sim_dir}/reads/${m.sample}_spike${pct}"
     def fs = kind == 'short'
         ? [file("${d}_R1.fastq.gz"), file("${d}_R2.fastq.gz"), file("${d}_short.composition.tsv")]
@@ -120,7 +120,7 @@ def existingReads(m, pct, kind) {
 
 // ================================================================ data generation
 
-process FORMAT_FUNGUS {
+process TAG_FUNGAL_REF {
     tag "${meta.sample}"
     publishDir path: { meta.origin == 'real' ? "${params.real_dir}/references" : "${params.sim_dir}/references/fungus" }, mode: 'copy'
 
@@ -136,7 +136,7 @@ process FORMAT_FUNGUS {
     """
 }
 
-process FORMAT_CONTAM {
+process TAG_CONTAM_REF {
     tag "${taxon}"
     publishDir "${params.sim_dir}/references/contaminants", mode: 'copy'
 
@@ -154,7 +154,7 @@ process FORMAT_CONTAM {
 }
 
 // sample genome + all contaminants: minimap2 labels each contig FUNGUS_ / CONTAM_ by its best match
-process COMBINED_REFERENCE {
+process BUILD_COMBINED_REF {
     tag "${meta.sample}"
     publishDir "${params.sim_dir}/references/combined", mode: 'copy'
 
@@ -170,7 +170,7 @@ process COMBINED_REFERENCE {
     """
 }
 
-process SIMULATE_SHORT {
+process SIMULATE_ILLUMINA {
     tag "${meta.sample}:${pct}%"
     publishDir "${params.sim_dir}/reads", mode: 'copy'
 
@@ -214,7 +214,7 @@ process SIMULATE_SHORT {
     """
 }
 
-process SIMULATE_LONG_FUNGUS {
+process SIMULATE_ONT_FUNGUS {
     tag "${meta.sample}"
 
     input:
@@ -233,7 +233,7 @@ process SIMULATE_LONG_FUNGUS {
     """
 }
 
-process SIMULATE_LONG_SPIKE {
+process SIMULATE_ONT_SPIKE {
     tag "${meta.sample}:${pct}%"
     publishDir "${params.sim_dir}/reads", mode: 'copy'
 
@@ -292,7 +292,7 @@ process CP00_RAW_BASELINE {
 }
 
 // cp01 is split in two so the hybrid track can reuse the cleaned Illumina reads without SPAdes
-process READ_PREP {
+process CLEAN_READS {
     tag "${meta.id}"
 
     input:
@@ -303,7 +303,7 @@ process READ_PREP {
     path ("*.time.tsv"), emit: times
 
     script:
-    def cp = 'cp01_mito_filtered_asm'
+    def cp = 'cp01_spades_asm'
     def seed = meta.mito_seed ? "-s ${meta.mito_seed}" : ''
     """
     timeit.sh ${meta.id} ${cp} trim \\
@@ -319,7 +319,7 @@ process READ_PREP {
     """
 }
 
-process CP01_MITO_FILTERED_ASM {
+process CP01_SPADES_ASM {
     tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
@@ -327,18 +327,18 @@ process CP01_MITO_FILTERED_ASM {
     tuple val(meta), path(reads)
 
     output:
-    tuple val(meta), val('cp01_mito_filtered_asm'), path("${meta.id}.cp01.fasta"), emit: fasta
+    tuple val(meta), val('cp01_spades_asm'), path("${meta.id}.cp01.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     """
-    timeit.sh ${meta.id} cp01_mito_filtered_asm assemble \\
+    timeit.sh ${meta.id} cp01_spades_asm assemble \\
         AAFTF assemble -1 ${reads[0]} -2 ${reads[1]} \\
         -c ${task.cpus} -m ${task.memory.toGiga()} --method spades -o ${meta.id}.cp01.fasta
     """
 }
 
-process CP01_LONG_ASM {
+process CP01_FLYE_ASM {
     tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
@@ -453,7 +453,7 @@ process CP05_RMDUP {
 }
 
 // long: racon with the ONT reads; hybrid: racon, then polypolish with filtered Illumina reads
-process CP06_POLISHED {
+process CP06_POLISH {
     tag "${meta.id}:${branch}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
@@ -498,28 +498,6 @@ process QUAST {
     """
 }
 
-process COMPLEASM {
-    tag "${meta.id}:${cp}"
-    publishDir "${params.outdir}/03_completeness/compleasm", mode: 'copy'
-
-    input:
-    tuple val(meta), val(cp), path(asm)
-
-    output:
-    path "${meta.id}__${cp}"
-
-    script:
-    // writable library (compleasm updates file_versions.tsv on every run); see workflow/scripts/setup_compleasm_library.sh
-    def lib = params.compleasm_library ? "-L ${params.compleasm_library}" : ''
-    // same OrthoDB version as BUSCO (compleasm defaults to odb12): taken from the lineage suffix, e.g. _odb12.2
-    def odb = (meta.lineage =~ /_(odb[\d.]+)$/) ? (meta.lineage =~ /_(odb[\d.]+)$/)[0][1] : 'odb12.2'
-    """
-    compleasm run -a ${asm} -o ${meta.id}__${cp} -l ${meta.lineage.replaceAll('_odb[\\d.]+$', '')} --odb ${odb} -t ${task.cpus} ${lib}
-    # drop ~2.5 GB of intermediates per run; keep summary.txt, full tables, detected_genes.gff, gene_marker.fasta
-    rm -rf ${meta.id}__${cp}/*/miniprot_output.gff ${meta.id}__${cp}/*/translated_protein.fasta ${meta.id}__${cp}/*/hmmer_output
-    """
-}
-
 process BUSCO {
     tag "${meta.id}:${cp}"
     publishDir "${params.outdir}/03_completeness/busco", mode: 'copy'
@@ -533,9 +511,11 @@ process BUSCO {
     script:
     // shared, read-only BUSCO download folder (<dir>/lineages/<lineage>); --offline: never download or write there
     def dl = params.busco_downloads ? "--download_path ${params.busco_downloads} --offline" : ''
+    // --opt-out-run-stats: skip BUSCO 6's usage-statistics upload, which fails on the cluster (HTTP 502) after a
+    // ~16 min wait per job
     """
     busco -i ${asm} -m genome --miniprot -l ${meta.lineage} -o ${meta.id}__${cp} --out_path . \\
-        --cpu ${task.cpus} ${dl}
+        --cpu ${task.cpus} ${dl} --opt-out-run-stats
     # drop ~3.5 GB of intermediates per run (miniprot alignments, a log duplicating them, hmmsearch output,
     # the unpacked protein database); keep short summaries, full_table.tsv, missing list, busco_sequences
     rm -rf ${meta.id}__${cp}/tmp ${meta.id}__${cp}/run_*/miniprot_output ${meta.id}__${cp}/run_*/hmmer_output \\
@@ -543,7 +523,30 @@ process BUSCO {
     """
 }
 
-process MINIMAP2_COMBINED {
+// alignment of a checkpoint (query) to the sample's reference (target) for interactive dot plots in
+// D-GENIES "Plot alignment": upload <name>.paf, <name>.target.idx and <name>.query.idx (D-GENIES index
+// format: sample name, then one "sequence<TAB>length" line per sequence; small, unlike the FASTA files)
+process DOTPLOT_PAF {
+    tag "${meta.id}:${cp}"
+    publishDir "${params.outdir}/05_dotplots", mode: 'copy'
+
+    input:
+    tuple val(meta), val(cp), path(asm), path(ref)
+
+    output:
+    path "${meta.id}__${cp}.{paf,target.idx,query.idx}"
+
+    script:
+    def n = "${meta.id}__${cp}"
+    """
+    minimap2 -x asm5 -t ${task.cpus} ${ref} ${asm} > ${n}.paf
+    fasta_idx() { awk -v name="\$2" 'BEGIN { print name } /^>/ { if (id) print id "\t" len; id = substr(\$1, 2); len = 0; next } { len += length(\$0) } END { if (id) print id "\t" len }' "\$1"; }
+    fasta_idx ${ref} ${meta.sample} > ${n}.target.idx
+    fasta_idx ${asm} ${n} > ${n}.query.idx
+    """
+}
+
+process MAP_TO_COMBINED_REF {
     tag "${meta.id}:${cp}"
     publishDir "${params.outdir}/04_decontamination/paf", mode: 'copy'
 
@@ -579,13 +582,12 @@ process DECON_METRICS {
     """
 }
 
-process AGGREGATE {
+process AGGREGATE_RESULTS {
     publishDir params.outdir, mode: 'copy'
 
     input:
     path aliases, stageAs: 'eval_aliases.tsv'
     path quast, stageAs: 'quast/*'
-    path compleasm, stageAs: 'compleasm/*'
     path busco, stageAs: 'busco/*'
     path decon, stageAs: 'decon/*'
     path times, stageAs: 'times.tsv'
@@ -599,7 +601,7 @@ process AGGREGATE {
 
     script:
     """
-    aggregate_benchmark_results.py --quast quast/* --compleasm compleasm/* --busco busco/* \\
+    aggregate_benchmark_results.py --quast quast/* --busco busco/* \\
         --decon decon/* --times times.tsv --aliases eval_aliases.tsv -o final_report.tsv
     # cp03 rows have extra columns (TP/FN/FP/TN, precision, recall, F1): merge by column name
     python -c "import glob, pandas as pd; pd.concat([pd.read_csv(f, sep='\\t') for f in sorted(glob.glob('decon/*'))]).to_csv('precision_recall_f1.tsv', sep='\\t', index=False)"
@@ -610,13 +612,24 @@ process AGGREGATE {
 
 // ================================================================ workflow
 
+// Channel notation used in the comments below:
+//   meta  sample metadata map, one per sample (sampleRow): sample (file-safe key), name (NCBI organism
+//         name), origin ('sim' | 'real'), genome_size, phylum, taxid, lineage, mito_seed, source_reference
+//         (downloaded FASTA), accessions, read1/read2/longreads/longread_type (real datasets only). Per
+//         dataset it also gets id (<sample>_spike<pct>_<track> or <sample>_real_<track>), spike_pct ('real'
+//         for real datasets), track, tagged_ref (tagged fungal FASTA) and combined_ref (sample +
+//         contaminants FASTA; null for real datasets).
+//   cp    checkpoint name, e.g. 'cp03_purged_taxpurge'
+//   (a, b, ...) one channel item (tuple)
 workflow {
+    // placeholder for optional path inputs (e.g. no Illumina reads for long-only polishing)
     NO_FILE = file("${projectDir}/assets/NO_FILE")
 
+    // tracks to run (--tracks): which read types are needed follows from them
     def tracks = params.tracks.toString().tokenize(',')*.trim()
-    def bad = tracks - ['short', 'long', 'hybrid']
-    if (bad) {
-        error("Unknown track(s) in --tracks: ${bad.join(', ')} (use short, long, hybrid)")
+    def unknown_tracks = tracks - ['short', 'long', 'hybrid']
+    if (unknown_tracks) {
+        error("Unknown track(s) in --tracks: ${unknown_tracks.join(', ')} (use short, long, hybrid)")
     }
     def want_short = 'short' in tracks
     def want_long = 'long' in tracks
@@ -624,198 +637,245 @@ workflow {
     def need_illumina = want_short || want_hybrid
     def need_ont = want_long || want_hybrid
 
-    // ---- references: simulated samples (samples.tsv) and real datasets (real_samples.tsv)
-    sim_rows = channel.fromPath(params.samples).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'sim') }
+    // ---- references: simulated samples (sim_samples.tsv) and real datasets (real_samples.tsv)
+    // sim_rows / real_rows: (meta, downloaded reference FASTA), one per row of sim_samples.tsv / real_samples.tsv
+    sim_rows = channel.fromPath(params.sim_samples).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'sim') }
     def real_tsv = params.real_samples ? file(params.real_samples) : null
     real_rows = real_tsv && real_tsv.exists()
         ? channel.fromPath(real_tsv).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'real') }
         : channel.empty()
-    fungus_all = FORMAT_FUNGUS(sim_rows.mix(real_rows))
-    fungus = fungus_all.filter { m, _f -> m.origin == 'sim' }
-    real_fungus = fungus_all.filter { m, _f -> m.origin == 'real' }
+    // tagged_refs: (meta, tagged reference FASTA, headers FUNGUS_*) for every sample; a process can only be
+    // called once, so simulated and real samples go through TAG_FUNGAL_REF together and are split again:
+    // sim_refs (simulated samples) and real_refs (real datasets)
+    tagged_refs = TAG_FUNGAL_REF(sim_rows.mix(real_rows))
+    sim_refs = tagged_refs.filter { m, _f -> m.origin == 'sim' }
+    real_refs = tagged_refs.filter { m, _f -> m.origin == 'real' }
 
-    contams = FORMAT_CONTAM(
-        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(taxonKey(r.organism), r.group, r.accessions ?: '', file(r.reference)) }
+    // contam_refs: (taxon key, group, tagged contaminant FASTA, headers CONTAM_<taxon>_*), one per contaminants.tsv row
+    contam_refs = TAG_CONTAM_REF(
+        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(safeKey(r.organism), r.group, r.accessions ?: '', file(r.reference)) }
     )
-    contam_set = contams.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
+    // contam_panel: a single item (['taxon:group', ...], [contaminant FASTAs]) with the whole panel,
+    // combined with every simulation job
+    contam_panel = contam_refs.toList().map { l -> tuple(l.collect { t -> "${t[0]}:${t[1]}" }, l.collect { t -> t[2] }) }
 
-    combined = COMBINED_REFERENCE(fungus.combine(contam_set).map { m, f, _g, c -> tuple(m, f, c) })
+    // combined: (meta, <sample>_with_contaminants.fa) per simulated sample; minimap2 target for contig labelling
+    combined_refs = BUILD_COMBINED_REF(sim_refs.combine(contam_panel).map { m, f, _g, c -> tuple(m, f, c) })
 
-    levels = channel.fromList(params.spike_levels.toString().tokenize(','))
-    // (meta, fungus.fa, sample_with_contaminants.fa)
-    refs = fungus.join(combined)
-    times = channel.empty()
-    composition = channel.empty()
-    assemblies = channel.empty()
+    // levels: one item per spike level ('0', '1', '5', '15')
+    spike_levels = channel.fromList(params.spike_levels.toString().tokenize(','))
+    // sim_refs_combined: (meta, tagged fungal FASTA, sample_with_contaminants.fa) per simulated sample
+    sim_refs_combined = sim_refs.join(combined_refs)
+    // Channels filled step by step (mix) as the tracks below run:
+    //   timing_tsvs:      timing TSVs from timeit.sh, one per timed command
+    //   composition_tsvs: <dataset>.composition.tsv, realised fungal / contaminant amounts per simulated dataset
+    //   cp01_assemblies:  (meta, cp, FASTA) of the first assembly of each dataset (cp01), input to the cleanup
+    //   checkpoints:      (meta, cp, FASTA) of every checkpoint, input to the evaluation
+    timing_tsvs = channel.empty()
+    composition_tsvs = channel.empty()
+    cp01_assemblies = channel.empty()
     checkpoints = channel.empty()
-    // (meta of short dataset, filtered Illumina reads)
-    illumina = channel.empty()
-    // (meta of long dataset, ONT reads)
-    ont = channel.empty()
+    // clean_illumina: (meta of short dataset, [filtered R1, R2]) from CLEAN_READS; used by cp01 SPAdes, covpurge and polypolish
+    clean_illumina = channel.empty()
+    // ont_reads: (meta of long dataset, ONT reads); used by flye (cp01) and racon (cp06)
+    ont_reads = channel.empty()
 
     // ---- Illumina datasets: needed by the short track and for hybrid polishing
     if (need_illumina) {
-        short_jobs = fungus
-            .combine(levels)
-            .combine(contam_set)
+        // illumina_jobs: (meta, fungal FASTA, pct, groups, contaminant FASTAs) per sample × spike level, branched
+        // into 'reuse' (reads with a matching .sim_hash already in sim_dir/reads) and 'simulate'
+        illumina_jobs = sim_refs
+            .combine(spike_levels)
+            .combine(contam_panel)
             .branch { m, _f, pct, _g, _c ->
-                reuse: existingReads(m, pct, 'short')
+                reuse: reusableReads(m, pct, 'short')
                 simulate: true
             }
-        sim = SIMULATE_SHORT(short_jobs.simulate.map { m, f, pct, g, c -> tuple(m, f, pct, g, c, simHash(m, pct, 'short')) })
-        reused = short_jobs.reuse.map { m, _f, pct, _g, _c ->
-            def fs = existingReads(m, pct, 'short')
+        // sim_illumina.reads: (meta, pct, [R1, R2]) newly simulated; sim_illumina.composition: composition TSVs
+        sim_illumina = SIMULATE_ILLUMINA(illumina_jobs.simulate.map { m, f, pct, g, c -> tuple(m, f, pct, g, c, simHash(m, pct, 'short')) })
+        // reused_illumina: (meta, pct, [R1, R2], composition TSV) from an earlier run
+        reused_illumina = illumina_jobs.reuse.map { m, _f, pct, _g, _c ->
+            def fs = reusableReads(m, pct, 'short')
             tuple(m, pct, fs[0..1], fs[2])
         }
-        composition = composition.mix(sim.composition, reused.map { _m, _p, _r, c -> c })
-        sim_short = sim.reads
-            .mix(reused.map { m, pct, r, _c -> tuple(m, pct, r) })
-            .combine(refs, by: 0)
+        composition_tsvs = composition_tsvs.mix(sim_illumina.composition, reused_illumina.map { _m, _p, _r, c -> c })
+        // sim_short_ds: (dataset meta, [R1, R2]) per simulated short-read dataset; dataset fields added to meta
+        sim_short_ds = sim_illumina.reads
+            .mix(reused_illumina.map { m, pct, r, _c -> tuple(m, pct, r) })
+            .combine(sim_refs_combined, by: 0)
             .map { m, pct, reads, ref, comb ->
-                tuple(m + [id: "${m.sample}_spike${pct}_short".toString(), pct: pct, track: 'short', ref: ref, combined: comb], reads)
+                tuple(m + [id: "${m.sample}_spike${pct}_short".toString(), spike_pct: pct, track: 'short', tagged_ref: ref, combined_ref: comb], reads)
             }
         // real: no contaminant answer key, so no combined FASTA (decontamination metrics are skipped)
-        real_short = real_fungus
+        real_short_ds = real_refs
             .filter { m, _f -> m.read1 }
             .map { m, ref ->
-                tuple(m + [id: "${m.sample}_real_short".toString(), pct: 'real', track: 'short', ref: ref, combined: null], [m.read1, m.read2].findAll { r -> r })
+                tuple(m + [id: "${m.sample}_real_short".toString(), spike_pct: 'real', track: 'short', tagged_ref: ref, combined_ref: null], [m.read1, m.read2].findAll { r -> r })
             }
-        datasets = sim_short.mix(real_short)
-        prep = READ_PREP(datasets)
-        illumina = prep.reads
-        times = times.mix(prep.times)
+        // short_ds: (dataset meta, [R1, R2]) for all short-read datasets, simulated and real
+        short_ds = sim_short_ds.mix(real_short_ds)
+        // cleaned.reads: (dataset meta, [filtered R1, R2]) after AAFTF trim → mito → filter
+        cleaned = CLEAN_READS(short_ds)
+        clean_illumina = cleaned.reads
+        timing_tsvs = timing_tsvs.mix(cleaned.times)
 
         // ---- short track: cp00 baseline + cp01 SPAdes on cleaned reads
         if (want_short) {
-            cp00 = CP00_RAW_BASELINE(datasets)
-            cp01 = CP01_MITO_FILTERED_ASM(illumina)
-            assemblies = assemblies.mix(cp01.fasta)
-            checkpoints = checkpoints.mix(cp00.fasta, cp01.fasta)
-            times = times.mix(cp00.times, cp01.times)
+            // cp00.fasta / cp01_short.fasta: (dataset meta, cp, FASTA)
+            cp00 = CP00_RAW_BASELINE(short_ds)
+            cp01_short = CP01_SPADES_ASM(clean_illumina)
+            cp01_assemblies = cp01_assemblies.mix(cp01_short.fasta)
+            checkpoints = checkpoints.mix(cp00.fasta, cp01_short.fasta)
+            timing_tsvs = timing_tsvs.mix(cp00.times, cp01_short.times)
         }
     }
 
     // ---- ONT datasets: one flye assembly per dataset, shared by the long and hybrid
     // tracks until polishing (those shared checkpoints are labelled '..._long')
     if (need_ont) {
-        long_jobs = fungus
-            .combine(levels)
-            .combine(contam_set)
+        // ont_jobs: as illumina_jobs, for ONT reads
+        ont_jobs = sim_refs
+            .combine(spike_levels)
+            .combine(contam_panel)
             .branch { m, _f, pct, _g, _c ->
-                reuse: existingReads(m, pct, 'long')
+                reuse: reusableReads(m, pct, 'long')
                 simulate: true
             }
-        // badread on the fungus only for samples with at least one spike level to simulate
-        fungus_ont = SIMULATE_LONG_FUNGUS(long_jobs.simulate.map { m, f, _p, _g, _c -> tuple(m, f) }.unique())
-        lsim = SIMULATE_LONG_SPIKE(
-            long_jobs.simulate.combine(fungus_ont, by: 0).map { m, f, pct, g, c, fr -> tuple(m, f, fr, pct, g, c, simHash(m, pct, 'long')) }
+        // fungal_ont_reads: (meta, fungal ONT reads), one per sample (shared by all its spike levels); badread runs
+        // only for samples with at least one spike level still to simulate
+        fungal_ont_reads = SIMULATE_ONT_FUNGUS(ont_jobs.simulate.map { m, f, _p, _g, _c -> tuple(m, f) }.unique())
+        // sim_ont.reads: (meta, pct, ONT reads) with contaminant reads added; sim_ont.composition: composition TSVs
+        sim_ont = SIMULATE_ONT_SPIKE(
+            ont_jobs.simulate.combine(fungal_ont_reads, by: 0).map { m, f, pct, g, c, fr -> tuple(m, f, fr, pct, g, c, simHash(m, pct, 'long')) }
         )
-        lreused = long_jobs.reuse.map { m, _f, pct, _g, _c ->
-            def fs = existingReads(m, pct, 'long')
+        // reused_ont: (meta, pct, ONT reads, composition TSV) from an earlier run
+        reused_ont = ont_jobs.reuse.map { m, _f, pct, _g, _c ->
+            def fs = reusableReads(m, pct, 'long')
             tuple(m, pct, fs[0], fs[1])
         }
-        composition = composition.mix(lsim.composition, lreused.map { _m, _p, _r, c -> c })
-        sim_long = lsim.reads
-            .mix(lreused.map { m, pct, r, _c -> tuple(m, pct, r) })
-            .combine(refs, by: 0)
+        composition_tsvs = composition_tsvs.mix(sim_ont.composition, reused_ont.map { _m, _p, _r, c -> c })
+        // sim_long_ds: (dataset meta, ONT reads) per simulated long-read dataset
+        sim_long_ds = sim_ont.reads
+            .mix(reused_ont.map { m, pct, r, _c -> tuple(m, pct, r) })
+            .combine(sim_refs_combined, by: 0)
             .map { m, pct, reads, ref, comb ->
-                tuple(m + [id: "${m.sample}_spike${pct}_long".toString(), pct: pct, track: 'long', ref: ref, combined: comb], reads)
+                tuple(m + [id: "${m.sample}_spike${pct}_long".toString(), spike_pct: pct, track: 'long', tagged_ref: ref, combined_ref: comb], reads)
             }
-        real_long = real_fungus
+        real_long_ds = real_refs
             .filter { m, _f -> m.longreads }
             .map { m, ref ->
-                tuple(m + [id: "${m.sample}_real_long".toString(), pct: 'real', track: 'long', ref: ref, combined: null], m.longreads)
+                tuple(m + [id: "${m.sample}_real_long".toString(), spike_pct: 'real', track: 'long', tagged_ref: ref, combined_ref: null], m.longreads)
             }
-        long_ds = sim_long.mix(real_long)
-        cp01l = CP01_LONG_ASM(long_ds)
-        assemblies = assemblies.mix(cp01l.fasta)
-        checkpoints = checkpoints.mix(cp01l.fasta)
-        times = times.mix(cp01l.times)
-        ont = long_ds
+        // long_ds: (dataset meta, ONT reads) for all long-read datasets, simulated and real
+        long_ds = sim_long_ds.mix(real_long_ds)
+        // cp01_long.fasta: (dataset meta, 'cp01_flye_asm', FASTA)
+        cp01_long = CP01_FLYE_ASM(long_ds)
+        cp01_assemblies = cp01_assemblies.mix(cp01_long.fasta)
+        checkpoints = checkpoints.mix(cp01_long.fasta)
+        timing_tsvs = timing_tsvs.mix(cp01_long.times)
+        ont_reads = long_ds
     }
 
     // ---- cleanup: cp02 vecscreen → cp03 purge (shared by long and hybrid) → cp04 covpurge (short, hybrid)
     // → cp05 rmdup → cp06 polish (long, hybrid). The long track has no Illumina reads, so no cp04.
-    cp02 = CP02_VECSCREEN(assemblies)
-    cp03a = CP03_TAXPURGE(cp02.fasta)
-    cp03 = cp03a.fasta
-    times = times.mix(cp02.times, cp03a.times)
+    // cp02.fasta, cp03_taxpurge.fasta, cp03_fcsgx.fasta, cp03: (dataset meta, cp, FASTA); cp03 holds both purge branches
+    cp02 = CP02_VECSCREEN(cp01_assemblies)
+    cp03_taxpurge = CP03_TAXPURGE(cp02.fasta)
+    cp03 = cp03_taxpurge.fasta
+    timing_tsvs = timing_tsvs.mix(cp02.times, cp03_taxpurge.times)
     if (params.fcs_gx_db) {
-        cp03b = CP03_FCSGX(cp02.fasta)
-        cp03 = cp03.mix(cp03b.fasta)
-        times = times.mix(cp03b.times)
+        cp03_fcsgx = CP03_FCSGX(cp02.fasta)
+        cp03 = cp03.mix(cp03_fcsgx.fasta)
+        timing_tsvs = timing_tsvs.mix(cp03_fcsgx.times)
     }
     checkpoints = checkpoints.mix(cp02.fasta, cp03)
 
-    // (sample, pct) links datasets of the same sample and spike level across tracks
-    illumina_k = illumina.map { m, r -> tuple(datasetKey(m), r) }
-    cov_short = cp03.filter { m, _cp, _a -> m.track == 'short' }.combine(illumina, by: 0)
-    // hybrid branches off the long assembly after cp03, where Illumina reads exist for the same dataset
-    cov_hybrid = want_hybrid
+    // clean_illumina_by_key: ([sample, spike_pct], [filtered R1, R2]); trackLinkKey [sample, spike_pct] links datasets of the same sample and
+    // spike level across tracks (short ↔ long ↔ hybrid)
+    clean_illumina_by_key = clean_illumina.map { m, r -> tuple(trackLinkKey(m), r) }
+    // covpurge_in_short: (short meta, cp, cp03 FASTA, [filtered R1, R2])
+    covpurge_in_short = cp03.filter { m, _cp, _a -> m.track == 'short' }.combine(clean_illumina, by: 0)
+    // covpurge_in_hybrid: (hybrid meta, cp, long cp03 FASTA, [filtered R1, R2]); hybrid branches off the long assembly
+    // after cp03, where Illumina reads exist for the same sample and spike level
+    covpurge_in_hybrid = want_hybrid
         ? cp03.filter { m, _cp, _a -> m.track == 'long' }
-            .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
-            .combine(illumina_k, by: 0)
-            .map { _k, m, cp, a, r -> tuple(asHybrid(m), cp, a, r) }
+            .map { m, cp, a -> tuple(trackLinkKey(m), m, cp, a) }
+            .combine(clean_illumina_by_key, by: 0)
+            .map { _k, m, cp, a, r -> tuple(toHybridMeta(m), cp, a, r) }
         : channel.empty()
-    cp04 = CP04_COVPURGE(cov_short.mix(cov_hybrid))
-    times = times.mix(cp04.times)
+    // cp04.fasta: (short / hybrid meta, 'cp04_covpurge_<branch>', FASTA)
+    cp04 = CP04_COVPURGE(covpurge_in_short.mix(covpurge_in_hybrid))
+    timing_tsvs = timing_tsvs.mix(cp04.times)
     checkpoints = checkpoints.mix(cp04.fasta)
 
-    long_cp03 = want_long ? cp03.filter { m, _cp, _a -> m.track == 'long' } : channel.empty()
-    cp05 = CP05_RMDUP(cp04.fasta.mix(long_cp03))
-    times = times.mix(cp05.times)
+    // rmdup_in_long: (long meta, cp, FASTA); the long track goes from cp03 straight to rmdup
+    rmdup_in_long = want_long ? cp03.filter { m, _cp, _a -> m.track == 'long' } : channel.empty()
+    // cp05.fasta: (meta, 'cp05_rmdup_<branch>', FASTA) for short, long and hybrid datasets
+    cp05 = CP05_RMDUP(cp04.fasta.mix(rmdup_in_long))
+    timing_tsvs = timing_tsvs.mix(cp05.times)
     checkpoints = checkpoints.mix(cp05.fasta)
 
     // ---- cp06: long (racon) and hybrid (racon + polypolish)
     if (need_ont) {
-        ont_k = ont.map { m, r -> tuple(datasetKey(m), r) }
-        long_in = cp05.fasta
+        // ont_reads_by_key: ([sample, spike_pct], ONT reads)
+        ont_reads_by_key = ont_reads.map { m, r -> tuple(trackLinkKey(m), r) }
+        // polish_in_long: (long meta, cp, cp05 FASTA, ONT reads, NO_FILE): racon only
+        polish_in_long = cp05.fasta
             .filter { m, _cp, _a -> m.track == 'long' }
-            .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
-            .combine(ont_k, by: 0)
+            .map { m, cp, a -> tuple(trackLinkKey(m), m, cp, a) }
+            .combine(ont_reads_by_key, by: 0)
             .map { _k, m, cp, a, lr -> tuple(m, cp, a, lr, NO_FILE) }
-        hybrid_in = cp05.fasta
+        // polish_in_hybrid: (hybrid meta, cp, cp05 FASTA, ONT reads, [filtered R1, R2]): racon, then polypolish
+        polish_in_hybrid = cp05.fasta
             .filter { m, _cp, _a -> m.track == 'hybrid' }
-            .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
-            .combine(ont_k, by: 0)
-            .combine(illumina_k, by: 0)
+            .map { m, cp, a -> tuple(trackLinkKey(m), m, cp, a) }
+            .combine(ont_reads_by_key, by: 0)
+            .combine(clean_illumina_by_key, by: 0)
             .map { _k, m, cp, a, lr, sr -> tuple(m, cp, a, lr, sr) }
-        cp06 = CP06_POLISHED(long_in.mix(hybrid_in))
-        times = times.mix(cp06.times)
+        // cp06.fasta: (long / hybrid meta, 'cp06_polished_<branch>', FASTA)
+        cp06 = CP06_POLISH(polish_in_long.mix(polish_in_hybrid))
+        timing_tsvs = timing_tsvs.mix(cp06.times)
         checkpoints = checkpoints.mix(cp06.fasta)
     }
 
     // ---- evaluation
-    // QUAST / compleasm / BUSCO run once per unique assembly (same sample + same sequences, ignoring
+    // QUAST / BUSCO run once per unique assembly (same sample + same sequences, ignoring
     // contig names and order), e.g. when a step removes nothing; the first checkpoint seen is
-    // evaluated at once and the others get its results in AGGREGATE (eval_aliases.tsv)
-    keyed = checkpoints.map { m, cp, a -> tuple("${m.sample}:${seqFingerprint(a)}".toString(), m, cp, a) }
-    unique_cps = keyed.unique { t -> t[0] }.map { _k, m, cp, a -> tuple(m, cp, a) }
-    eval_aliases = keyed
+    // evaluated at once and the others get its results in AGGREGATE_RESULTS (eval_aliases.tsv)
+    // checkpoints_fp: ('<sample>:<sequence fingerprint>', meta, cp, FASTA) for every checkpoint
+    checkpoints_fp = checkpoints.map { m, cp, a -> tuple("${m.sample}:${seqFingerprint(a)}".toString(), m, cp, a) }
+    // unique_checkpoints: (meta, cp, FASTA), the first checkpoint seen for each fingerprint
+    unique_checkpoints = checkpoints_fp.unique { t -> t[0] }.map { _k, m, cp, a -> tuple(m, cp, a) }
+    // eval_aliases: one TSV (key, <dataset>__<cp>) listing every checkpoint with its fingerprint
+    eval_aliases = checkpoints_fp
         .map { k, m, cp, _a -> "${k}\t${m.id}__${cp}\n".toString() }
         .collectFile(name: 'eval_aliases.tsv', seed: "key\tname\n", sort: true)
-    quast = QUAST(unique_cps.map { m, cp, a -> tuple(m, cp, a, m.ref) })
-    comp = COMPLEASM(unique_cps)
-    busco = BUSCO(unique_cps)
-    // decontamination metrics need the combined FASTA, i.e. simulated datasets only
-    paf = MINIMAP2_COMBINED(checkpoints.filter { m, _cp, _a -> m.combined }.map { m, cp, a -> tuple(m, cp, a, m.combined) })
-    // compare against the dataset's cp02; hybrid datasets share cp01-cp03 with their long dataset,
-    // so their later checkpoints are compared with the long dataset's cp02
-    cp02_paf = paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m.id, a, p) }
-    decon = DECON_METRICS(
-        paf.map { m, cp, a, p -> tuple(m.id.replaceAll('_hybrid$', '_long'), m, cp, a, p) }
-            .combine(cp02_paf, by: 0)
+    // quast_dirs / busco_dirs: one result folder <dataset>__<cp> per unique assembly
+    quast_dirs = QUAST(unique_checkpoints.map { m, cp, a -> tuple(m, cp, a, m.tagged_ref) })
+    // PAF of every checkpoint against the sample's reference, for D-GENIES (results/05_dotplots/<dataset>__<cp>.paf)
+    DOTPLOT_PAF(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.tagged_ref) })
+    busco_dirs = BUSCO(unique_checkpoints)
+    // combined_paf: (meta, cp, FASTA, PAF vs the combined FASTA) per checkpoint of a simulated dataset (real datasets have no combined FASTA,
+    // so no decontamination metrics)
+    combined_paf = MAP_TO_COMBINED_REF(checkpoints.filter { m, _cp, _a -> m.combined_ref }.map { m, cp, a -> tuple(m, cp, a, m.combined_ref) })
+    // cp02_combined_paf: (dataset id, cp02 FASTA, cp02 PAF), the 'before' state for every checkpoint of that dataset;
+    // hybrid datasets share cp01-cp03 with their long dataset, so they are compared with its cp02
+    cp02_combined_paf = combined_paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m.id, a, p) }
+    // decon_tsvs: one <dataset>__<cp>.precision_recall_f1.tsv per checkpoint
+    decon_tsvs = DECON_METRICS(
+        combined_paf.map { m, cp, a, p -> tuple(m.id.replaceAll('_hybrid$', '_long'), m, cp, a, p) }
+            .combine(cp02_combined_paf, by: 0)
             .map { _id, m, cp, a, p, before_a, before_p -> tuple(m, cp, a, p, before_a, before_p) }
     )
 
-    AGGREGATE(
+    // AGGREGATE_RESULTS waits for everything above and writes final_report.tsv and the summary tables
+    AGGREGATE_RESULTS(
         eval_aliases,
-        quast.collect(),
-        comp.collect(),
-        busco.collect(),
-        decon.collect().ifEmpty([]),
+        quast_dirs.collect(),
+        busco_dirs.collect(),
+        decon_tsvs.collect().ifEmpty([]),
         // one table: per-step timing files share names (e.g. vecscreen.time.tsv) across datasets
-        times.collectFile(name: 'times.tsv', keepHeader: true, skip: 1, sort: true),
-        composition.collect().ifEmpty([]),
+        timing_tsvs.collectFile(name: 'times.tsv', keepHeader: true, skip: 1, sort: true),
+        composition_tsvs.collect().ifEmpty([]),
     )
 }

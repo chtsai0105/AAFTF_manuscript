@@ -6,7 +6,7 @@ This workflow implements an automated, reproducible benchmarking harness for the
 ### Benchmark Design Principles
 1. **Self-Contained Evaluation:** Do NOT compare against external wrapper pipelines (e.g., Shovill, fspassemblypipeline). All benchmarks compare AAFTF intermediate stages against a naive raw assembler baseline (short reads) or evaluate interchangeable internal modules.
 2. **Deterministic Ground Truth:** All read datasets are simulated from finished, chromosome-level reference genomes using `InSilicoSeq` (short reads) and `Badread` (long reads), with fixed seeds and exact, recorded contaminant fractions.
-3. **Decoupled Verification:** Evaluation relies strictly on nucleotide-level validation (`QUAST`, `compleasm`, `BUSCO -m genome --miniprot`, and `minimap2` alignment against known reference targets). Do NOT invoke *ab initio* gene annotation pipelines (e.g., Augustus, BRAKER, funannotate).
+3. **Decoupled Verification:** Evaluation relies strictly on nucleotide-level validation (`QUAST`, `BUSCO -m genome --miniprot`, and `minimap2` alignment against known reference targets). Do NOT invoke *ab initio* gene annotation pipelines (e.g., Augustus, BRAKER, funannotate).
 
 ### Sequencing Tracks
 Each sample × spike level is run on up to three tracks, chosen with `tracks` (`short`, `long`, `hybrid`; default `short`):
@@ -25,8 +25,8 @@ All scripts, workflows, and outputs follow this layout (repository root):
 ├── README.md
 ├── pixi.toml / pixi.lock              # tool environments (default, eval, busco)
 ├── config/
-│   ├── samples.tsv                 # simulated samples: organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed
-│   ├── real_samples.tsv            # real datasets: samples.tsv columns + read1, read2, longreads, longread_type, sra_short, sra_long
+│   ├── sim_samples.tsv                 # simulated samples: organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed
+│   ├── real_samples.tsv            # real datasets: sim_samples.tsv columns + read1, read2, longreads, longread_type, sra_short, sra_long
 │   ├── contaminants.tsv            # organism, reference, accessions, group, assembly (source assembly, informational)
 │   └── params.yaml                 # coverage, spike levels, group weights, tracks, partitions, ...
 ├── data/                           # not tracked in git
@@ -45,7 +45,7 @@ All scripts, workflows, and outputs follow this layout (repository root):
 │   ├── bin -> scripts              # put on PATH by Nextflow
 │   ├── assets/NO_FILE              # placeholder for optional inputs
 │   └── scripts/
-│       ├── fetch_samples.sh                # download fungal references (samples.tsv)
+│       ├── fetch_samples.sh                # download fungal references (sim_samples.tsv)
 │       ├── fetch_contaminants.sh           # download contaminant references (contaminants.tsv)
 │       ├── fetch_reads.sh                  # download real reads from SRA (real_samples.tsv)
 │       ├── format_reference_headers.py     # FUNGUS_/CONTAM_ headers + depth= copy-number tags
@@ -57,8 +57,9 @@ All scripts, workflows, and outputs follow this layout (repository root):
 └── results/                        # not tracked in git
     ├── 01_checkpoints/             # intermediate assembly FASTAs per dataset and ablation stage
     ├── 02_quast/                   # QUAST assessment directories
-    ├── 03_completeness/            # compleasm and BUSCO outputs
+    ├── 03_completeness/            # BUSCO outputs
     ├── 04_decontamination/         # PAF alignments and per-checkpoint metrics
+    ├── 05_dotplots/                # minimap2 PAF + D-GENIES index files per checkpoint (vs the reference)
     ├── pipeline_info/              # Nextflow trace and report
     ├── final_report.tsv            # master aggregated results matrix (tidy, long format)
     ├── precision_recall_f1.tsv     # decontamination metrics for all checkpoints
@@ -91,7 +92,7 @@ Before simulating reads, every FASTA header is tagged to make downstream mapping
   `cat data/sim/references/fungus/{sample}.fa data/sim/references/contaminants/*.fa > data/sim/references/combined/{sample}_with_contaminants.fa`
 
 ### 3.2 Real Datasets
-Real runs of the exact strains with a reference genome are listed in `config/real_samples.tsv` (reference accessions as in `samples.tsv`, plus local read paths and SRA run accessions) and downloaded with `fetch_samples.sh config/real_samples.tsv` and `fetch_reads.sh`. The available reads decide the tracks (short: read1/read2; long: longreads; hybrid: both). Real datasets run the same checkpoints and the QUAST, completeness and timing evaluation; contaminant precision/recall (§5.3) needs the simulated answer key and is computed for simulated datasets only.
+Real runs of the exact strains with a reference genome are listed in `config/real_samples.tsv` (reference accessions as in `sim_samples.tsv`, plus local read paths and SRA run accessions) and downloaded with `fetch_samples.sh config/real_samples.tsv` and `fetch_reads.sh`. The available reads decide the tracks (short: read1/read2; long: longreads; hybrid: both). Real datasets run the same checkpoints and the QUAST, completeness and timing evaluation; contaminant precision/recall (§5.3) needs the simulated answer key and is computed for simulated datasets only.
 
 ### 3.3 Read Simulation
 
@@ -145,7 +146,7 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
    ```
    FASTA output: `{outdir}/scaffolds.fasta`. No long-read baseline: AAFTF does no read cleanup before Flye, so a raw Flye run equals cp01.
 
-2. **`cp01_mito_filtered_asm`** (short): read sanitation followed by core assembly:
+2. **`cp01_spades_asm`** (short): read sanitation (`CLEAN_READS`) followed by core assembly (`CP01_SPADES_ASM`):
    * `AAFTF trim --method bbduk -c {threads} -1 {R1} -2 {R2} -o reads_trimmed` → `reads_trimmed_1P/_2P.fastq.gz`
    * `AAFTF mito -1 reads_trimmed_1P.fastq.gz -2 reads_trimmed_2P.fastq.gz [-s {mito_seed}] -o mito_assembly.fasta` (a failure is tolerated)
    * `AAFTF filter -1 ... -2 ... --aligner bbduk -c {threads} -o reads_filtered [-s mito_assembly.fasta]` → `reads_filtered_filtered_1/_2.fastq.gz`
@@ -173,13 +174,13 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
 
    `AAFTF sort` is not benchmarked: it only orders contigs by length, renames them and applies the same 500 bp minimum as rmdup, so its output has exactly the sequences of its input (verified on the test run) and no metric can change.
 
-Each unique assembly (same sample and sequences, ignoring contig names and order) is evaluated once by QUAST, compleasm and BUSCO; checkpoints with identical sequences reuse those results (`eval` / `same_sequences_as` rows in `final_report.tsv`).
+Each unique assembly (same sample and sequences, ignoring contig names and order) is evaluated once by QUAST and BUSCO; checkpoints with identical sequences reuse those results (`eval` / `same_sequences_as` rows in `final_report.tsv`).
 
 ---
 
 ## 5. Quantitative Evaluation Suite
 
-Automated processes run four evaluation modules on every checkpoint FASTA:
+Automated processes run five evaluation modules on every checkpoint FASTA:
 
 ### 5.1 Contiguity & Misassembly (`QUAST`)
 Reference-guided `quast.py` with fungal parameters, against the tagged fungal reference:
@@ -195,19 +196,16 @@ quast.py -r data/{sim,real}/references/.../{sample}.fa --fungus --threads {threa
 * `Misassemblies` (Relocations, Translocations, Inversions)
 * `Unaligned length`
 
-### 5.2 Biological Completeness (`compleasm` & `BUSCO`)
-Both tools in direct nucleotide mode against the sample's OrthoDB v12.2 lineage dataset, using the same lineage files: BUSCO reads the shared download folder (`busco_downloads`, read-only, `--offline`), and compleasm a writable library (`compleasm_library`) whose lineage folders are symlinks into it (`pixi run setup-compleasm`).
+### 5.2 Biological Completeness (`BUSCO`)
+BUSCO in genome mode with the miniprot engine, against the sample's OrthoDB v12.2 lineage dataset, read from a shared download folder (`busco_downloads`, read-only, `--offline`):
 
 ```bash
-# Tool 1: compleasm (miniprot mode); lineage name without suffix, OrthoDB version from it
-compleasm run -a {assembly_checkpoint.fasta} -o results/03_completeness/compleasm/{dataset}__{checkpoint} \
-  -l {lineage} --odb odb12.2 -t {threads} -L {compleasm_library}
-
-# Tool 2: BUSCO v6 (genome mode, miniprot engine)
 busco -i {assembly_checkpoint.fasta} -m genome --miniprot -l {lineage}_odb12.2 \
   -o {dataset}__{checkpoint} --out_path results/03_completeness/busco --cpu {threads} \
-  --download_path {busco_downloads} --offline
+  --download_path {busco_downloads} --offline --opt-out-run-stats
 ```
+`--opt-out-run-stats` skips BUSCO 6's usage-statistics upload, which fails on the cluster after a ~16 min wait per job. compleasm was evaluated in the test run and dropped: with BUSCO in miniprot mode both tools run the same miniprot alignment, and compleasm then spent ~42 min per 12 Mb checkpoint in its own post-processing (vs ~1 min for BUSCO), with results within 0.2% of BUSCO's.
+
 **Required Metrics to Extract:**
 * Complete Single-Copy (S%)
 * Complete Duplicated (D%) — *track reduction from checkpoint 00 to 04*
@@ -238,7 +236,14 @@ Parse the PAF file (`col 1: query_contig`, `col 3–4: query start/end`, `col 6:
 
 Expected limitation: `taxpurge -p <phylum>` keeps every contig of the sample's phylum, so it should miss the *Penicillium* cross-contaminant in the Ascomycota samples but not in *C. neoformans*.
 
-### 5.4 Computational Efficiency
+### 5.4 Dot Plots (`minimap2` → D-GENIES)
+Every checkpoint is aligned to the sample's reference, to inspect structural problems (splits, misjoins, duplicated or missing sequence) as an interactive dot plot in D-GENIES:
+```bash
+minimap2 -x asm5 -t {threads} {reference.fa} {assembly_checkpoint.fasta} > {dataset}__{checkpoint}.paf
+```
+Output: `results/05_dotplots/{dataset}__{checkpoint}.paf` plus D-GENIES index files `.target.idx` (reference) and `.query.idx` (checkpoint), which replace uploading the FASTA files. D-GENIES has no batch image export, so plots are made interactively ("Plot alignment" mode).
+
+### 5.5 Computational Efficiency
 Every assembler and AAFTF command is wrapped in GNU `/usr/bin/time -v` (`timeit.sh`); the Nextflow trace records the same per task:
 * `Wall-clock runtime (seconds)`
 * `Peak Resident Set Size (RSS memory, MB)`
@@ -251,5 +256,5 @@ Every assembler and AAFTF command is wrapped in GNU `/usr/bin/time -v` (`timeit.
 
 1. **Nextflow workflow (`workflow/main.nf`)** that parameterizes the ablation checkpoints, the three tracks and the evaluation steps across all samples and spike levels, with `slurm` (partition `epyc`; FCS-GX on `highmem`) and `pixi` profiles.
 2. **`calculate_decon_metrics.py`** in Python using `pandas` to process the PAF files and emit `precision_recall_f1.tsv`.
-3. **`aggregate_benchmark_results.py`** to combine QUAST `transposed_report.tsv`, compleasm/BUSCO summary files, decontamination metrics and execution times into a single tidy `final_report.tsv` (`dataset, sample, spike_pct, track, checkpoint, tool, metric, value`) suitable for plotting in R (`ggplot2`) or Python (`seaborn`).
-4. **`pixi.toml` + `pixi.lock`** with pinned versions of `aaftf`, `insilicoseq`, `badread`, `quast`, `compleasm`, `busco` (v6), `minimap2`, `samtools` and the AAFTF tool chain, split into three environments (`default`, `eval`, `busco`) because they cannot be solved together.
+3. **`aggregate_benchmark_results.py`** to combine QUAST `transposed_report.tsv`, BUSCO summary files, decontamination metrics and execution times into a single tidy `final_report.tsv` (`dataset, sample, spike_pct, track, checkpoint, tool, metric, value`) suitable for plotting in R (`ggplot2`) or Python (`seaborn`).
+4. **`pixi.toml` + `pixi.lock`** with pinned versions of `aaftf`, `insilicoseq`, `badread`, `quast`, `busco` (v6), `minimap2`, `samtools` and the AAFTF tool chain, split into three environments (`default`, `eval`, `busco`) because they cannot be solved together.

@@ -4,16 +4,15 @@ description = "Benchmark suite for AAFTF (see aaftf_benchmark_specification.md)"
 channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
-# Three environments, because the tools cannot be solved together: taxpurge's
-# sourmash_plugin_branchwater needs Python >= 3.13, compleasm (via sepp/dendropy) needs an older
-# Python, and BUSCO's dependencies (augustus/boost) conflict with compleasm's:
+# Three environments, kept apart so each tool gets the Python and libraries it supports
+# (taxpurge's sourmash_plugin_branchwater needs Python >= 3.13):
 #   default : Nextflow, AAFTF and its tools, read simulators, helper scripts
-#   eval    : QUAST, compleasm
+#   eval    : QUAST
 #   busco   : BUSCO (+ miniprot)
 # Run from the repository root:
 #   pixi install --all
 #   pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
-# The `pixi` profile in workflow/nextflow.config activates `eval` for QUAST/COMPLEASM and `busco` for BUSCO.
+# The `pixi` profile in workflow/nextflow.config activates `eval` for QUAST and `busco` for BUSCO.
 
 # AAFTF reference databases (`pixi run AAFTF database required taxpurge`), several GB.
 # Folders are searched in order; downloads go to the first writable one (the personal folder),
@@ -35,7 +34,7 @@ blast = "*"                    # vecscreen
 bwa = "*"
 bowtie2 = ">=2.5.5,<3"
 samtools = ">=1.24,<2"
-minimap2 = "*"                 # rmdup, polish; also contigs -> references/combined labelling
+minimap2 = "*"                 # rmdup, polish; contig labelling; PAF for D-GENIES dot plots
 flye = "*"                     # long / hybrid tracks
 racon = "*"                    # long / hybrid polish
 polypolish = ">=0.7.1,<0.8"    # hybrid polish
@@ -66,7 +65,6 @@ time = "*"                     # GNU time for workflow/scripts/timeit.sh
 
 [feature.eval.dependencies]
 quast = ">=5.2"
-compleasm = ">=0.2.6"
 
 [feature.busco.dependencies]
 busco = ">=6.1,<7"              # v6 for OrthoDB v12.2 lineages (-m genome --miniprot)
@@ -81,9 +79,8 @@ busco = { features = ["busco"], no-default-feature = true }
 aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "9ce56a1" }
 
 [tasks]
-fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/samples.tsv" }
+fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/sim_samples.tsv" }
 fetch-real = { cmd = "workflow/scripts/fetch_samples.sh config/real_samples.tsv && workflow/scripts/fetch_reads.sh config/real_samples.tsv", description = "Download same-strain references and SRA reads in config/real_samples.tsv" }
 fetch-contaminants = { cmd = "workflow/scripts/fetch_contaminants.sh", description = "Download contaminant references in config/contaminants.tsv" }
-setup-compleasm = { cmd = "workflow/scripts/setup_compleasm_library.sh", description = "Symlink the BUSCO lineages (busco_downloads) into a writable compleasm library (compleasm_library)" }
 lint = { cmd = "nextflow lint workflow/main.nf workflow/nextflow.config", description = "Lint the Nextflow workflow" }
 benchmark = { cmd = "nextflow run workflow/main.nf -params-file config/params.yaml", description = "Run the benchmark; add e.g. -profile pixi,slurm -resume --tracks short,long" }

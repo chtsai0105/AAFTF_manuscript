@@ -5,7 +5,6 @@ Implements [aaftf_benchmark_specification.md](aaftf_benchmark_specification.md) 
 ```
 pixi install --all                       # tools: see pixi.toml (environments default, eval, busco)
 pixi run AAFTF database required taxpurge  # AAFTF databases (AAFTF_DB in pixi.toml; export your own to override)
-pixi run setup-compleasm                 # compleasm library: symlinks to the BUSCO odb12.2 lineages (busco_downloads)
 pixi run fetch-samples && pixi run fetch-contaminants
 pixi run fetch-real                      # optional: real datasets in config/real_samples.tsv
 pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
@@ -27,11 +26,11 @@ data/real/reads/                                     real sequencing reads
 ## Real datasets
 
 `config/real_samples.tsv` lists real runs whose exact strain has a reference genome. Columns are those of
-`samples.tsv` (`organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed`) plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
+`sim_samples.tsv` (`organism, reference, accessions, genome_size, phylum, taxid, lineage, mito_seed`) plus `read1`, `read2`, `longreads`, `longread_type` (optional, default `longread_type` param) and
 `sra_short` / `sra_long` (SRA run accessions, comma-separated). `pixi run fetch-real` downloads the references
 (`fetch_samples.sh`) and reads (`fetch_reads.sh`, sra-tools). Tracks are taken from the reads present: short
 (read1/read2), long (longreads), hybrid (both). Datasets are named `<sample>_real_<track>`; they go through the
-same checkpoints and QUAST / compleasm / BUSCO / timing, but not the decontamination precision/recall, which
+same checkpoints and QUAST / BUSCO / timing, but not the decontamination precision/recall, which
 needs the simulated answer key. In `final_report.tsv`, `origin` is `real` and `spike_pct` is empty.
 
 Example row (tab-separated):
@@ -41,7 +40,7 @@ Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_
 
 ## Steps
 
-1. Fungal references are defined in `config/samples.tsv`; `workflow/scripts/fetch_samples.sh` downloads each row's
+1. Fungal references are defined in `config/sim_samples.tsv`; `workflow/scripts/fetch_samples.sh` downloads each row's
    `accessions` into its `reference` path. A `GCF_`/`GCA_` accession fetches the whole assembly (NCBI Datasets);
    other accessions fetch single sequences, e.g. a mitogenome missing from the assembly (skipped when the assembly
    already has it). `acc:copies` sets a copy number as for contaminants: the mitochondria are at a placeholder 50.
@@ -92,7 +91,7 @@ Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_
    `group_weights`, the spike level, `short_coverage`/`read_length`/`iss_model` (short) or
    `long_coverage`/`badread_args` (long), and the helper scripts that compute read counts and rename headers.
    It does not cover the simulator versions or the fixed seeds; set `reuse_reads: false` to force new reads.
-4. Every checkpoint is evaluated with QUAST, compleasm, BUSCO (`--miniprot`) and minimap2 against `data/sim/references/combined/<sample>_with_contaminants.fa`
+4. Every checkpoint is evaluated with QUAST, BUSCO (`--miniprot`) and minimap2 against `data/sim/references/combined/<sample>_with_contaminants.fa`
    (the sample genome plus all contaminants), which labels each contig fungal or contaminant by its best match.
 
 Outputs (`results/`):
@@ -101,11 +100,14 @@ Outputs (`results/`):
 - `precision_recall_f1.tsv`: contig composition for every checkpoint, plus TP/FN/FP/TN, precision, recall and F1 for cp02 → cp03
 - `time_summary.tsv`: wall time, peak RSS, CPU % and exit status for every AAFTF / SPAdes call
 - `02_quast/`, `03_completeness/`, `04_decontamination/`: raw tool outputs
+- `05_dotplots/<dataset>__<checkpoint>.{paf,target.idx,query.idx}`: minimap2 alignment of each checkpoint (query)
+  to the sample's reference (target), for interactive dot plots in D-GENIES ("Plot alignment": upload the PAF and
+  the two `.idx` files). D-GENIES runs as a web app, e.g. locally with `pixi exec -s dgenies dgenies run -m standalone`
 
 ## Differences from the spec (current AAFTF CLI)
 - Reads use `-1/-2` (not `-l/-r`). trim writes `_1P/_2P.fastq.gz`; filter writes `_filtered_1/2.fastq.gz`.
 - `filter --aligner bbmap` is not a valid choice, so `bbduk` is the default (`filter_aligner`).
-- `sourpurge` is now `taxpurge`, which needs `-p <phylum>` from samples.tsv.
+- `sourpurge` is now `taxpurge`, which needs `-p <phylum>` from sim_samples.tsv.
 - `fcs_gx_purge` needs `-d <db> -t <taxid>` and writes into an output directory.
 - `mito` output is passed to `filter -s` to screen mitochondrial reads. If NOVOPlasty fails (for example, the reference has no mitogenome), the run continues without it.
 - `iss --coverage 50` is a distribution name in InSilicoSeq, not a depth; depth is set with `--readcount_file`.

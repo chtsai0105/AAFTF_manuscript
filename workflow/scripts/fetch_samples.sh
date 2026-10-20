@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Download the fungal reference genomes listed in config/samples.tsv from NCBI.
+# Download the fungal reference genomes listed in config/sim_samples.tsv from NCBI.
 #
-#   workflow/scripts/fetch_samples.sh [--force] [tsv]   (default: config/samples.tsv)
+#   workflow/scripts/fetch_samples.sh [--force] [tsv]   (default: config/sim_samples.tsv)
 #
 # Each row's `accessions` (comma-separated) are downloaded into its `reference` path, in order:
 #   GCF_/GCA_ assembly accession  -> whole genome FASTA via the NCBI Datasets API
@@ -15,7 +15,7 @@ set -euo pipefail
 
 force=0
 if [[ ${1:-} == --force || ${1:-} == -f ]]; then force=1; shift; fi
-tsv=${1:-config/samples.tsv}
+tsv=${1:-config/sim_samples.tsv}
 EUTILS=https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi
 DATASETS=https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession
 key=${NCBI_API_KEY:+&api_key=$NCBI_API_KEY}

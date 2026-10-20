@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Combine QUAST, compleasm, BUSCO, decontamination and timing outputs into a tidy final_report.tsv.
+"""Combine QUAST, BUSCO, decontamination and timing outputs into a tidy final_report.tsv.
 
 Output columns: dataset, sample, origin, spike_pct, track, checkpoint, tool, metric, value
 Evaluation directories are named <dataset>__<checkpoint>; datasets are named <sample>_spike<pct>_<track> (simulated) or <sample>_real_<track> (real reads);
@@ -15,12 +15,11 @@ MISASM_KEEP = ['# c. relocations', '# c. translocations', '# c. inversions']
 
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument('--quast', nargs='*', default=[], help='QUAST output dirs')
-ap.add_argument('--compleasm', nargs='*', default=[], help='compleasm output dirs')
 ap.add_argument('--busco', nargs='*', default=[], help='BUSCO output dirs')
 ap.add_argument('--decon', nargs='*', default=[], help='calculate_decon_metrics.py TSVs')
 ap.add_argument('--times', nargs='*', default=[], help='timeit.sh TSVs')
 ap.add_argument('--aliases', help='eval_aliases.tsv: key, name (<dataset>__<checkpoint>); checkpoints with the same key\n'
-                'have identical sequences and share one QUAST/compleasm/BUSCO evaluation')
+                'have identical sequences and share one QUAST/BUSCO evaluation')
 ap.add_argument('-o', '--out', default='final_report.tsv')
 a = ap.parse_args()
 
@@ -41,12 +40,6 @@ for d in a.quast:
     vals = transposed(f'{d}/transposed_report.tsv', QUAST_KEEP)
     vals.update(transposed(f'{d}/contigs_reports/transposed_report_misassemblies.tsv', MISASM_KEEP))
     for k, v in vals.items(): add(ds, cp, 'quast', k, v)
-
-for d in a.compleasm:
-    ds, cp = ds_cp(d)
-    for fn in glob.glob(f'{d}/summary.txt'):
-        for key, pct in re.findall(r'^([SDFIM]):([\d.]+)%', open(fn).read(), re.M):
-            add(ds, cp, 'compleasm', f'{key}%', float(pct))
 
 for d in a.busco:
     ds, cp = ds_cp(d)
@@ -69,11 +62,11 @@ for fn in a.times:
 
 out = pd.DataFrame(rows, columns=['dataset', 'checkpoint', 'tool', 'metric', 'value'])
 
-# copy QUAST / compleasm / BUSCO results to checkpoints with identical sequences (evaluated once)
+# copy QUAST / BUSCO results to checkpoints with identical sequences (evaluated once)
 if a.aliases:
     al = pd.read_csv(a.aliases, sep='\t')
     al[['dataset', 'checkpoint']] = al['name'].str.split('__', n=1, expand=True)
-    shared = out[out.tool.isin(['quast', 'compleasm', 'busco'])]
+    shared = out[out.tool.isin(['quast', 'busco'])]
     have = set(zip(shared.dataset, shared.checkpoint))
     extra = []
     for _, grp in al.groupby('key'):
