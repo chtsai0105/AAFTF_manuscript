@@ -19,6 +19,8 @@ ap.add_argument('--compleasm', nargs='*', default=[], help='compleasm output dir
 ap.add_argument('--busco', nargs='*', default=[], help='BUSCO output dirs')
 ap.add_argument('--decon', nargs='*', default=[], help='calculate_decon_metrics.py TSVs')
 ap.add_argument('--times', nargs='*', default=[], help='timeit.sh TSVs')
+ap.add_argument('--aliases', help='eval_aliases.tsv: key, name (<dataset>__<checkpoint>); checkpoints with the same key\n'
+                'have identical sequences and share one QUAST/compleasm/BUSCO evaluation')
 ap.add_argument('-o', '--out', default='final_report.tsv')
 a = ap.parse_args()
 
@@ -66,6 +68,28 @@ for fn in a.times:
             add(r.dataset, r.checkpoint, 'time', f'{r.step}:{k}', r[k])
 
 out = pd.DataFrame(rows, columns=['dataset', 'checkpoint', 'tool', 'metric', 'value'])
+
+# copy QUAST / compleasm / BUSCO results to checkpoints with identical sequences (evaluated once)
+if a.aliases:
+    al = pd.read_csv(a.aliases, sep='\t')
+    al[['dataset', 'checkpoint']] = al['name'].str.split('__', n=1, expand=True)
+    shared = out[out.tool.isin(['quast', 'compleasm', 'busco'])]
+    have = set(zip(shared.dataset, shared.checkpoint))
+    extra = []
+    for _, grp in al.groupby('key'):
+        members = list(zip(grp.dataset, grp.checkpoint))
+        src = next((m for m in members if m in have), None)
+        if src is None:
+            continue
+        src_rows = shared[(shared.dataset == src[0]) & (shared.checkpoint == src[1])]
+        for ds, cp in members:
+            if (ds, cp) == src:
+                continue
+            if (ds, cp) not in have:
+                extra.append(src_rows.assign(dataset=ds, checkpoint=cp))
+            extra.append(pd.DataFrame([dict(dataset=ds, checkpoint=cp, tool='eval', metric='same_sequences_as', value=f'{src[0]}__{src[1]}')]))
+    if extra:
+        out = pd.concat([out] + extra, ignore_index=True)
 parts = out.dataset.str.extract(r'^(?P<sample>.+)_(?:spike(?P<spike_pct>[\d.]+)|(?P<real>real))_(?P<track>short|long|hybrid)$')
 out.insert(1, 'sample', parts['sample'])
 out.insert(2, 'origin', parts['real'].notna().map({True: 'real', False: 'sim'}))

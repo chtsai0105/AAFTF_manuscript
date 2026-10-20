@@ -19,13 +19,14 @@ group_weights:  "bacteria:0.65,host:0.15,vector:0.1,fungal:0.1"
 tracks:         short              # comma list of short, long, hybrid (e.g. "long" or "short,long,hybrid")
 reuse_reads:    true               # reuse data/sim/reads when their .sim_hash matches the current settings; false = always re-simulate
 long_coverage:  35
-badread_args:   "--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25"
+badread_args:   "--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,1 --chimeras 1.0 --glitches 10000,25,25"
 longread_type:  nano-hq            # flye read type for the simulated ONT reads
 
 # AAFTF
 trim_method:    bbduk
 filter_aligner: bbduk
 min_contig:     500
+covpurge_mincovpct: 5               # covpurge: drop contigs below this % of the N50 contigs' mean coverage
 fcs_gx_db:      null               # e.g. /dev/shm/gxdb/all; branch B is skipped when null
 
 # evaluation

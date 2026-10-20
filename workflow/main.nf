@@ -5,17 +5,17 @@
  *   1. Normalise reference headers (FUNGUS_*, CONTAM_<taxon>_*) and build one combined FASTA per sample
  *      (sample + all contaminants, data/sim/references/combined/<sample>_with_contaminants.fa)
  *   2. Simulate reads at 0/1/5/15% contaminant spike-in: InSilicoSeq Illumina and/or Badread ONT (as --tracks needs)
- *   3. Six-checkpoint ablation per dataset (track 'short'):
+ *   3. Ablation checkpoints per dataset (track 'short'):
  *        cp00_raw_baseline        spades.py --isolate on raw reads
  *        cp01_mito_filtered_asm   AAFTF trim → mito → filter → assemble
  *        cp02_vecscreen           AAFTF vecscreen
  *        cp03_purged_{taxpurge,fcsgx}   branch A: AAFTF taxpurge | branch B: AAFTF fcs_gx_purge
- *        cp04_rmdup_{branch}      AAFTF rmdup
- *        cp05_sorted_{branch}     AAFTF sort (no polishing, as in AAFTF pipeline_short)
+ *        cp04_covpurge_{branch}   AAFTF covpurge (filtered Illumina reads)
+ *        cp05_rmdup_{branch}      AAFTF rmdup
  *      --tracks (short,long,hybrid) picks which tracks run per sample × spike level (ONT assembled with AAFTF assemble --method flye):
- *        long:   cp01 flye → cp02 vecscreen → cp03 purge → cp04 rmdup → cp05 polish (racon) → sort
- *        hybrid: same assembly and cleanup as 'long'; cp05 = racon, then polypolish with the
- *                filtered Illumina reads of the same dataset (cp01 of the short track)
+ *        long:   cp01 flye → cp02 vecscreen → cp03 purge → cp05 rmdup → cp06 polish (racon); no cp04 (no Illumina reads)
+ *        hybrid: cp01-cp03 shared with 'long'; then cp04 covpurge and cp05 rmdup with its own Illumina reads,
+ *                cp06 = racon, then polypolish with the filtered Illumina reads of the same dataset
  *   4. Evaluate every checkpoint: QUAST, compleasm, BUSCO (miniprot), minimap2 vs the combined FASTA
  *   5. Aggregate into results/final_report.tsv
  * Every AAFTF / assembler call is wrapped in GNU time (scripts/timeit.sh).
@@ -39,12 +39,14 @@ params.group_weights = 'bacteria:0.65,host:0.15,vector:0.1,fungal:0.1'
 params.tracks = 'short'
 // use reads already in <sim_dir>/reads when their .sim_hash matches
 params.reuse_reads = true
-params.badread_args = '--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25'
+params.badread_args = '--length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 --identity 98.5,99.8,1 --chimeras 1.0 --glitches 10000,25,25'
 params.long_coverage = 35
 params.longread_type = 'nano-hq'
 params.trim_method = 'bbduk'
 params.filter_aligner = 'bbduk'
 params.min_contig = 500
+// covpurge: remove contigs below this % of the N50 contigs' mean coverage (AAFTF default 5)
+params.covpurge_mincovpct = 5
 params.fcs_gx_db = null
 // BUSCO download folder (read-only is fine) and compleasm library (writable; lineage folders may be symlinks)
 params.busco_downloads = null
@@ -68,6 +70,13 @@ def sampleRow(r, origin) {
         accessions: r.accessions ?: '', read1: optFile(r.read1), read2: optFile(r.read2), longreads: optFile(r.longreads), longread_type: r.longread_type ?: null,
     ]
     tuple(meta, file(r.reference))
+}
+
+// order- and name-independent fingerprint of an assembly: md5 of the sorted per-contig sequence md5s
+def seqFingerprint(f) {
+    def records = file(f).text.split(/(?m)^>/).findAll { r -> r.trim() }
+    def digests = records.collect { r -> r.substring(r.indexOf('\n') + 1).replaceAll(/\s+/, '').toUpperCase().md5() }
+    digests.sort().join(',').md5()
 }
 
 def datasetKey(m) {
@@ -196,7 +205,10 @@ process SIMULATE_SHORT {
     # realised ground truth (read pairs per source)
     nf=\$(( \$(zcat fungus_R1.fastq.gz | wc -l) / 4 ))
     nt=\$(( \$(zcat ${ds}_R1.fastq.gz | wc -l) / 4 ))
-    awk -v ds=${ds_track} -v nf=\$nf -v nt=\$nt 'BEGIN { printf "dataset\\tfungal_pairs\\tcontam_pairs\\tcontam_pct\\n%s\\t%d\\t%d\\t%.3f\\n", ds, nf, nt-nf, (nt-nf)*100/nt }' \\
+    # never hand an empty read set to the assembly steps
+    [ "\$nf" -gt 0 ] || { echo "ERROR: InSilicoSeq produced no fungal reads" >&2; exit 1; }
+    [ "${pct}" = "0" ] || [ "\$nt" -gt "\$nf" ] || { echo "ERROR: no contaminant reads at ${pct}%" >&2; exit 1; }
+    awk -v ds=${ds_track} -v nf=\$nf -v nt=\$nt 'BEGIN { printf "dataset\\tfungal_pairs\\tcontam_pairs\\tcontam_pct\\n%s\\t%d\\t%d\\t%.3f\\n", ds, nf, nt-nf, (nt > 0 ? (nt-nf)*100/nt : 0) }' \\
         > ${ds_track}.composition.tsv
     echo ${hash} > ${ds_track}.sim_hash
     """
@@ -216,6 +228,8 @@ process SIMULATE_LONG_FUNGUS {
     badread simulate --reference ${fungus} --quantity ${params.long_coverage}x \\
         ${params.badread_args} --seed 42 \\
         | gzip > ${meta.sample}_ont_fungus.fastq.gz
+    # never hand an empty read set to the next steps
+    [ "\$(zcat ${meta.sample}_ont_fungus.fastq.gz | head -c 1 | wc -c)" -gt 0 ] || { echo "ERROR: Badread produced no reads" >&2; exit 1; }
     """
 }
 
@@ -248,7 +262,9 @@ process SIMULATE_LONG_SPIKE {
     # realised ground truth (bases per source)
     fb=\$(zcat ${fungus_reads} | awk 'NR%4==2 {n+=length(\$0)} END {print n+0}')
     tb=\$(zcat ${meta.sample}_spike${pct}_ont.fastq.gz | awk 'NR%4==2 {n+=length(\$0)} END {print n+0}')
-    awk -v ds=${ds} -v f=\$fb -v t=\$tb 'BEGIN { printf "dataset\\tfungal_bases\\tcontam_bases\\tcontam_pct\\n%s\\t%d\\t%d\\t%.3f\\n", ds, f, t-f, (t-f)*100/t }' \\
+    [ "\$fb" -gt 0 ] || { echo "ERROR: no fungal long reads" >&2; exit 1; }
+    [ "${pct}" = "0" ] || [ "\$tb" -gt "\$fb" ] || { echo "ERROR: no contaminant long reads at ${pct}%" >&2; exit 1; }
+    awk -v ds=${ds} -v f=\$fb -v t=\$tb 'BEGIN { printf "dataset\\tfungal_bases\\tcontam_bases\\tcontam_pct\\n%s\\t%d\\t%d\\t%.3f\\n", ds, f, t-f, (t > 0 ? (t-f)*100/t : 0) }' \\
         > ${ds}.composition.tsv
     echo ${hash} > ${ds}.sim_hash
     """
@@ -396,28 +412,28 @@ process CP03_FCSGX {
     """
 }
 
-process CP04_RMDUP {
+// coverage purge with the filtered Illumina reads (short and hybrid; as AAFTF pipeline_short / pipeline_hybrid)
+process CP04_COVPURGE {
     tag "${meta.id}:${branch}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
-    tuple val(meta), val(cp), path(asm)
+    tuple val(meta), val(cp), path(asm), path(reads)
 
     output:
-    tuple val(meta), val("cp04_rmdup_${branch}"), path("${meta.id}.cp04_${branch}.fasta"), emit: fasta
+    tuple val(meta), val("cp04_covpurge_${branch}"), path("${meta.id}.cp04_${branch}.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     branch = cp.tokenize('_')[-1]
     """
-    timeit.sh ${meta.id} cp04_rmdup_${branch} rmdup \\
-        AAFTF rmdup -i ${asm} -c ${task.cpus} -ml ${params.min_contig} -o ${meta.id}.cp04_${branch}.fasta
+    timeit.sh ${meta.id} cp04_covpurge_${branch} covpurge \\
+        AAFTF covpurge -i ${asm} -1 ${reads[0]} -2 ${reads[1]} -mc ${params.covpurge_mincovpct} -c ${task.cpus} \\
+        -o ${meta.id}.cp04_${branch}.fasta
     """
 }
 
-// AAFTF pipeline_short does not polish (re-polishing with the assembly's own Illumina reads rarely helps),
-// so the short-track cp05 is sort only
-process CP05_SORTED {
+process CP05_RMDUP {
     tag "${meta.id}:${branch}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
@@ -425,19 +441,19 @@ process CP05_SORTED {
     tuple val(meta), val(cp), path(asm)
 
     output:
-    tuple val(meta), val("cp05_sorted_${branch}"), path("${meta.id}.cp05_${branch}.fasta"), emit: fasta
+    tuple val(meta), val("cp05_rmdup_${branch}"), path("${meta.id}.cp05_${branch}.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     branch = cp.tokenize('_')[-1]
     """
-    timeit.sh ${meta.id} cp05_sorted_${branch} sort \\
-        AAFTF sort -i ${asm} -ml ${params.min_contig} -o ${meta.id}.cp05_${branch}.fasta
+    timeit.sh ${meta.id} cp05_rmdup_${branch} rmdup \\
+        AAFTF rmdup -i ${asm} -c ${task.cpus} -ml ${params.min_contig} -o ${meta.id}.cp05_${branch}.fasta
     """
 }
 
 // long: racon with the ONT reads; hybrid: racon, then polypolish with filtered Illumina reads
-process CP05_LONG_POLISHED_SORTED {
+process CP06_POLISHED {
     tag "${meta.id}:${branch}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
@@ -445,12 +461,12 @@ process CP05_LONG_POLISHED_SORTED {
     tuple val(meta), val(cp), path(asm), path(longreads), path(short_reads)
 
     output:
-    tuple val(meta), val("cp05_polished_${branch}"), path("${meta.id}.cp05_${branch}.fasta"), emit: fasta
+    tuple val(meta), val("cp06_polished_${branch}"), path("${meta.id}.cp06_${branch}.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     branch = cp.tokenize('_')[-1]
-    def c = "cp05_polished_${branch}"
+    def c = "cp06_polished_${branch}"
     def hybrid = meta.track == 'hybrid'
     """
     timeit.sh ${meta.id} ${c} polish_racon \\
@@ -460,8 +476,7 @@ process CP05_LONG_POLISHED_SORTED {
         AAFTF polish -i racon.fasta -1 ${short_reads[0]} -2 ${short_reads[1]} --method polypolish \\
         -c ${task.cpus} -m ${task.memory.toGiga()} -o polished.fasta"""
         : 'mv racon.fasta polished.fasta'}
-    timeit.sh ${meta.id} ${c} sort \\
-        AAFTF sort -i polished.fasta -ml ${params.min_contig} -o ${meta.id}.cp05_${branch}.fasta
+    mv polished.fasta ${meta.id}.cp06_${branch}.fasta
     """
 }
 
@@ -500,6 +515,8 @@ process COMPLEASM {
     def odb = (meta.lineage =~ /_(odb[\d.]+)$/) ? (meta.lineage =~ /_(odb[\d.]+)$/)[0][1] : 'odb12.2'
     """
     compleasm run -a ${asm} -o ${meta.id}__${cp} -l ${meta.lineage.replaceAll('_odb[\\d.]+$', '')} --odb ${odb} -t ${task.cpus} ${lib}
+    # drop ~2.5 GB of intermediates per run; keep summary.txt, full tables, detected_genes.gff, gene_marker.fasta
+    rm -rf ${meta.id}__${cp}/*/miniprot_output.gff ${meta.id}__${cp}/*/translated_protein.fasta ${meta.id}__${cp}/*/hmmer_output
     """
 }
 
@@ -519,6 +536,10 @@ process BUSCO {
     """
     busco -i ${asm} -m genome --miniprot -l ${meta.lineage} -o ${meta.id}__${cp} --out_path . \\
         --cpu ${task.cpus} ${dl}
+    # drop ~3.5 GB of intermediates per run (miniprot alignments, a log duplicating them, hmmsearch output,
+    # the unpacked protein database); keep short summaries, full_table.tsv, missing list, busco_sequences
+    rm -rf ${meta.id}__${cp}/tmp ${meta.id}__${cp}/run_*/miniprot_output ${meta.id}__${cp}/run_*/hmmer_output \\
+        ${meta.id}__${cp}/logs/miniprot_align_*_out.log
     """
 }
 
@@ -550,7 +571,8 @@ process DECON_METRICS {
 
     script:
     // confusion matrix only for the purge step (cp02 → cp03); composition for every checkpoint
-    def before = cp.startsWith('cp03') ? "--before_fasta ${before_asm} --before_paf ${before_paf}" : ''
+    // purge steps (cp03 taxpurge / fcs_gx_purge, cp04 covpurge) get the confusion matrix, cumulative from cp02
+    def before = cp ==~ /cp0[34]_.*/ ? "--before_fasta ${before_asm} --before_paf ${before_paf}" : ''
     """
     calculate_decon_metrics.py --dataset ${meta.id} --checkpoint ${cp} --fasta ${asm} --paf ${paf} ${before} \\
         -o ${meta.id}__${cp}.precision_recall_f1.tsv
@@ -561,11 +583,12 @@ process AGGREGATE {
     publishDir params.outdir, mode: 'copy'
 
     input:
+    path aliases, stageAs: 'eval_aliases.tsv'
     path quast, stageAs: 'quast/*'
     path compleasm, stageAs: 'compleasm/*'
     path busco, stageAs: 'busco/*'
     path decon, stageAs: 'decon/*'
-    path times, stageAs: 'times/*'
+    path times, stageAs: 'times.tsv'
     path composition, stageAs: 'comp/*'
 
     output:
@@ -577,9 +600,10 @@ process AGGREGATE {
     script:
     """
     aggregate_benchmark_results.py --quast quast/* --compleasm compleasm/* --busco busco/* \\
-        --decon decon/* --times times/* -o final_report.tsv
-    awk 'FNR>1 || NR==1' decon/*  > precision_recall_f1.tsv
-    awk 'FNR>1 || NR==1' times/*  > time_summary.tsv
+        --decon decon/* --times times.tsv --aliases eval_aliases.tsv -o final_report.tsv
+    # cp03 rows have extra columns (TP/FN/FP/TN, precision, recall, F1): merge by column name
+    python -c "import glob, pandas as pd; pd.concat([pd.read_csv(f, sep='\\t') for f in sorted(glob.glob('decon/*'))]).to_csv('precision_recall_f1.tsv', sep='\\t', index=False)"
+    cp times.tsv time_summary.tsv
     awk 'FNR>1 || NR==1' comp/*   > read_composition.tsv
     """
 }
@@ -710,7 +734,8 @@ workflow {
         ont = long_ds
     }
 
-    // ---- shared cleanup: cp02 vecscreen → cp03 purge → cp04 rmdup
+    // ---- cleanup: cp02 vecscreen → cp03 purge (shared by long and hybrid) → cp04 covpurge (short, hybrid)
+    // → cp05 rmdup → cp06 polish (long, hybrid). The long track has no Illumina reads, so no cp04.
     cp02 = CP02_VECSCREEN(assemblies)
     cp03a = CP03_TAXPURGE(cp02.fasta)
     cp03 = cp03a.fasta
@@ -720,51 +745,77 @@ workflow {
         cp03 = cp03.mix(cp03b.fasta)
         times = times.mix(cp03b.times)
     }
-    cp04 = CP04_RMDUP(cp03)
+    checkpoints = checkpoints.mix(cp02.fasta, cp03)
+
+    // (sample, pct) links datasets of the same sample and spike level across tracks
+    illumina_k = illumina.map { m, r -> tuple(datasetKey(m), r) }
+    cov_short = cp03.filter { m, _cp, _a -> m.track == 'short' }.combine(illumina, by: 0)
+    // hybrid branches off the long assembly after cp03, where Illumina reads exist for the same dataset
+    cov_hybrid = want_hybrid
+        ? cp03.filter { m, _cp, _a -> m.track == 'long' }
+            .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
+            .combine(illumina_k, by: 0)
+            .map { _k, m, cp, a, r -> tuple(asHybrid(m), cp, a, r) }
+        : channel.empty()
+    cp04 = CP04_COVPURGE(cov_short.mix(cov_hybrid))
     times = times.mix(cp04.times)
-    checkpoints = checkpoints.mix(cp02.fasta, cp03, cp04.fasta)
+    checkpoints = checkpoints.mix(cp04.fasta)
 
-    // ---- cp05 short: sort only
-    if (want_short) {
-        cp05 = CP05_SORTED(cp04.fasta.filter { m, _cp, _a -> m.track == 'short' })
-        times = times.mix(cp05.times)
-        checkpoints = checkpoints.mix(cp05.fasta)
-    }
+    long_cp03 = want_long ? cp03.filter { m, _cp, _a -> m.track == 'long' } : channel.empty()
+    cp05 = CP05_RMDUP(cp04.fasta.mix(long_cp03))
+    times = times.mix(cp05.times)
+    checkpoints = checkpoints.mix(cp05.fasta)
 
-    // ---- cp05 long (racon) and/or hybrid (racon + polypolish)
+    // ---- cp06: long (racon) and hybrid (racon + polypolish)
     if (need_ont) {
-        // (sample, pct) links a long dataset to the Illumina reads of the same sample and spike level
-        long_cp04 = cp04.fasta
+        ont_k = ont.map { m, r -> tuple(datasetKey(m), r) }
+        long_in = cp05.fasta
             .filter { m, _cp, _a -> m.track == 'long' }
             .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
-            .combine(ont.map { m, r -> tuple(datasetKey(m), r) }, by: 0)
-        long_in = want_long
-            ? long_cp04.map { _k, m, cp, a, lr -> tuple(m, cp, a, lr, NO_FILE) }
-            : channel.empty()
-        // hybrid only where Illumina reads exist for the same dataset
-        hybrid_in = want_hybrid
-            ? long_cp04.combine(illumina.map { m, r -> tuple(datasetKey(m), r) }, by: 0).map { _k, m, cp, a, lr, sr -> tuple(asHybrid(m), cp, a, lr, sr) }
-            : channel.empty()
-        cp05l = CP05_LONG_POLISHED_SORTED(long_in.mix(hybrid_in))
-        times = times.mix(cp05l.times)
-        checkpoints = checkpoints.mix(cp05l.fasta)
+            .combine(ont_k, by: 0)
+            .map { _k, m, cp, a, lr -> tuple(m, cp, a, lr, NO_FILE) }
+        hybrid_in = cp05.fasta
+            .filter { m, _cp, _a -> m.track == 'hybrid' }
+            .map { m, cp, a -> tuple(datasetKey(m), m, cp, a) }
+            .combine(ont_k, by: 0)
+            .combine(illumina_k, by: 0)
+            .map { _k, m, cp, a, lr, sr -> tuple(m, cp, a, lr, sr) }
+        cp06 = CP06_POLISHED(long_in.mix(hybrid_in))
+        times = times.mix(cp06.times)
+        checkpoints = checkpoints.mix(cp06.fasta)
     }
 
     // ---- evaluation
-    quast = QUAST(checkpoints.map { m, cp, a -> tuple(m, cp, a, m.ref) })
-    comp = COMPLEASM(checkpoints)
-    busco = BUSCO(checkpoints)
+    // QUAST / compleasm / BUSCO run once per unique assembly (same sample + same sequences, ignoring
+    // contig names and order), e.g. when a step removes nothing; the first checkpoint seen is
+    // evaluated at once and the others get its results in AGGREGATE (eval_aliases.tsv)
+    keyed = checkpoints.map { m, cp, a -> tuple("${m.sample}:${seqFingerprint(a)}".toString(), m, cp, a) }
+    unique_cps = keyed.unique { t -> t[0] }.map { _k, m, cp, a -> tuple(m, cp, a) }
+    eval_aliases = keyed
+        .map { k, m, cp, _a -> "${k}\t${m.id}__${cp}\n".toString() }
+        .collectFile(name: 'eval_aliases.tsv', seed: "key\tname\n", sort: true)
+    quast = QUAST(unique_cps.map { m, cp, a -> tuple(m, cp, a, m.ref) })
+    comp = COMPLEASM(unique_cps)
+    busco = BUSCO(unique_cps)
     // decontamination metrics need the combined FASTA, i.e. simulated datasets only
     paf = MINIMAP2_COMBINED(checkpoints.filter { m, _cp, _a -> m.combined }.map { m, cp, a -> tuple(m, cp, a, m.combined) })
-    cp02_paf = paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m, a, p) }
-    decon = DECON_METRICS(paf.combine(cp02_paf, by: 0))
+    // compare against the dataset's cp02; hybrid datasets share cp01-cp03 with their long dataset,
+    // so their later checkpoints are compared with the long dataset's cp02
+    cp02_paf = paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m.id, a, p) }
+    decon = DECON_METRICS(
+        paf.map { m, cp, a, p -> tuple(m.id.replaceAll('_hybrid$', '_long'), m, cp, a, p) }
+            .combine(cp02_paf, by: 0)
+            .map { _id, m, cp, a, p, before_a, before_p -> tuple(m, cp, a, p, before_a, before_p) }
+    )
 
     AGGREGATE(
+        eval_aliases,
         quast.collect(),
         comp.collect(),
         busco.collect(),
         decon.collect().ifEmpty([]),
-        times.collect(),
+        // one table: per-step timing files share names (e.g. vecscreen.time.tsv) across datasets
+        times.collectFile(name: 'times.tsv', keepHeader: true, skip: 1, sort: true),
         composition.collect().ifEmpty([]),
     )
 }

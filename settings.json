@@ -1,0 +1,25 @@
+{
+    "nextflow.telemetry.enabled": false,
+	"files.watcherExclude": {
+		"**/.git/**": true,
+		"**/.pixi/**": true,
+		"**/.snakemake/**": true,
+		"**/.nextflow/**": true,
+		"**/work/**": true,
+		"**/results/**": true,
+		"**/data/**": true
+	},
+	"files.exclude": {
+		"**/.git": true,
+		"**/.pixi": true,
+		"**/.snakemake": true,
+		"**/.nextflow": true,
+		"**/work": true
+	},
+	"search.exclude": {
+		"**/.pixi": true,
+		"**/.snakemake": true,
+		"**/.nextflow": true,
+		"**/work": true
+	}
+}

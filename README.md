@@ -66,13 +66,18 @@ Neurospora crassa OR74A  data/real/references/Ncra_OR74A.fa  GCF_000182925.2,NC_
    The headers are rewritten to `FUNGUS_*` / `CONTAM_<taxon>_*` automatically.
 2. Reads are simulated with InSilicoSeq at 0/1/5/15% contaminant reads, split 65/15/10/10 between bacteria, host (human), vector and a fungal cross-contaminant (`group_weights`).
    Exact read counts per sequence go through `--readcount_file`; the realised mix is written to `results/read_composition.tsv`.
-3. Ablation checkpoints `cp00`–`cp05` (branch A `taxpurge`, branch B `fcs_gx_purge` when `fcs_gx_db` is set).
-   Short-track cp05 is `AAFTF sort` only (`cp05_sorted_*`), matching `AAFTF pipeline_short`, which does not polish.
+3. Ablation checkpoints: cp00 raw SPAdes, cp01 assembly, cp02 vecscreen, cp03 taxpurge (branch A) / `fcs_gx_purge`
+   (branch B, when `fcs_gx_db` is set), cp04 covpurge (short, hybrid), cp05 rmdup, cp06 polish (long, hybrid).
+   Short: cp00–cp05; long: cp01–cp03, cp05, cp06; hybrid: cp04–cp06 (cp01–cp03 shared with long).
+   The short track does not polish (as `AAFTF pipeline_short`); `AAFTF sort` is
+   not benchmarked, since it only renames and reorders contigs. Identical assemblies are evaluated once
+   (`same_sequences_as` rows in `final_report.tsv`).
    `tracks` (params.yaml or `--tracks`) picks what runs, as a comma list:
    - `short` (default): the six checkpoints above
-   - `long`: Badread ONT reads → `cp01_flye_asm` (AAFTF assemble --method flye) → cp02–cp04 → cp05 racon → sort
-   - `hybrid`: same assembly and cleanup as `long`; cp05 = racon, then polypolish with cleaned Illumina reads
-   `long` and `hybrid` share one flye assembly and cleanup (labelled `<sample>_spike<pct>_long`).
+   - `long`: Badread ONT reads → `cp01_flye_asm` (AAFTF assemble --method flye) → cp02, cp03 → cp05 rmdup → cp06 racon
+   - `hybrid`: cp01–cp03 shared with `long`; then cp04 covpurge and cp05 rmdup with cleaned Illumina reads,
+     cp06 = racon, then polypolish
+   `long` and `hybrid` share one flye assembly, vecscreen and purge (labelled `<sample>_spike<pct>_long`).
    Illumina reads are only simulated when `short` or `hybrid` is chosen; with `hybrid` but not `short`, they are
    cleaned (trim/mito/filter) but not assembled. No cp00 for long reads: a raw flye run would equal cp01.
    Long contaminant reads use the same % (by bases) and group weights.

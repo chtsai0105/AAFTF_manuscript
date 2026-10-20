@@ -2,6 +2,7 @@
 data/
 results/
 results_test/
+logs/
 
 # Nextflow run state and intermediates
 work/

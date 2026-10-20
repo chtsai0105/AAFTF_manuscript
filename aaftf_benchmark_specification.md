@@ -105,11 +105,11 @@ iss generate --genomes {fungus.fa} --readcount_file fungus.readcount.tsv --model
 Output: `data/sim/reads/{sample}_spike{pct}_R1.fastq.gz`, `_R2.fastq.gz`.
 
 #### Track B: Long-Read Simulation (`Badread`)
-ONT R10.4.1/Q20+-like reads at `long_coverage` (default 35×), settings in `badread_args`:
+ONT R10.4.1/Q20+-like reads at `long_coverage` (default 35×), settings in `badread_args`. `--identity` is mean,max,stdev (%):
 ```bash
 badread simulate --reference {fungus.fa} --quantity 35x \
   --length 15000,8000 --error_model nanopore2023 --qscore_model nanopore2023 \
-  --identity 98.5,99.8,99.2 --chimeras 1.0 --glitches 10000,25,25 --seed 42 | gzip > fungus_ont.fastq.gz
+  --identity 98.5,99.8,1 --chimeras 1.0 --glitches 10000,25,25 --seed 42 | gzip > fungus_ont.fastq.gz
 ```
 Output: `data/sim/reads/{sample}_spike{pct}_ont.fastq.gz`. All sequences are simulated as linear.
 
@@ -137,7 +137,7 @@ No plant host is included: the samples are pure-culture lab strains. Organelle c
 ## 4. Execution Tracks & Checkpoint Definitions
 
 ### Track 1: Sequential Ablation Pipeline
-For each dataset, the intermediate FASTA after every step is saved to `results/01_checkpoints/{dataset}/` to isolate the value of each AAFTF command. cp02–cp04 are shared by all tracks; the long and hybrid tracks share one assembly and cleanup (labelled `_long`) and split at cp05.
+For each dataset, the intermediate FASTA after every step is saved to `results/01_checkpoints/{dataset}/` to isolate the value of each AAFTF command. Checkpoint numbers mean the same step in every track (the long track has no cp04, as it has no Illumina reads). The long and hybrid tracks share one assembly and cp02–cp03 (labelled `_long`) and split at cp04.
 
 1. **`cp00_raw_baseline`** (short only): standard raw assembler without AAFTF pre-filtering or post-processing:
    ```bash
@@ -161,13 +161,19 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
    * Branch A: `AAFTF taxpurge -i {cp02.fasta} -c {threads} -p {phylum} -o {dataset}.cp03_taxpurge.fasta`
    * Branch B (only with `fcs_gx_db`): `AAFTF fcs_gx_purge -i {cp02.fasta} -c {threads} -d {fcs_gx_db} -t {taxid} -o fcsgx/` (runs on the `fcsgx_partition`)
 
-5. **`cp04_rmdup_{branch}`**:
-   * `AAFTF rmdup -i {cp03.fasta} -c {threads} -ml 500 -o {dataset}.cp04_{branch}.fasta`
+5. **`cp04_covpurge_{branch}`** (short and hybrid; as in `AAFTF pipeline_short` / `pipeline_hybrid`):
+   * `AAFTF covpurge -i {cp03.fasta} -1/-2 {filtered Illumina reads} -mc 5 -c {threads} -o {dataset}.cp04_{branch}.fasta` (removes contigs below 5% of the N50 contigs' mean read coverage; `covpurge_mincovpct`)
 
-6. **cp05** (per branch):
-   * short — **`cp05_sorted_{branch}`**: `AAFTF sort -i {cp04.fasta} -ml 500 -o {dataset}.cp05_{branch}.fasta` (no polishing, as in `AAFTF pipeline_short`)
-   * long — **`cp05_polished_{branch}`**: `AAFTF polish --method racon -lr {ont}` → `AAFTF sort`
-   * hybrid — **`cp05_polished_{branch}`**: `AAFTF polish --method racon -lr {ont}` → `AAFTF polish --method polypolish -1/-2 {filtered Illumina reads}` → `AAFTF sort`
+6. **`cp05_rmdup_{branch}`**:
+   * `AAFTF rmdup -i {cp04.fasta, or cp03 for long} -c {threads} -ml 500 -o {dataset}.cp05_{branch}.fasta`
+
+7. **cp06_polished_{branch}** (long and hybrid only; the short track ends at cp05, as `AAFTF pipeline_short` does not polish):
+   * long: `AAFTF polish --method racon -lr {ont}`
+   * hybrid: `AAFTF polish --method racon -lr {ont}` → `AAFTF polish --method polypolish -1/-2 {filtered Illumina reads}`
+
+   `AAFTF sort` is not benchmarked: it only orders contigs by length, renames them and applies the same 500 bp minimum as rmdup, so its output has exactly the sequences of its input (verified on the test run) and no metric can change.
+
+Each unique assembly (same sample and sequences, ignoring contig names and order) is evaluated once by QUAST, compleasm and BUSCO; checkpoints with identical sequences reuse those results (`eval` / `same_sequences_as` rows in `final_report.tsv`).
 
 ---
 
@@ -220,7 +226,7 @@ minimap2 -x asm5 --secondary=no -t {threads} \
 Parse the PAF file (`col 1: query_contig`, `col 3–4: query start/end`, `col 6: target_seq`):
 * Assign each contig the class with the most aligned bases: `^FUNGUS_` → **Fungal**, `^CONTAM_` → **Contaminant**; contigs without hits → **Unassigned** (excluded from the confusion matrix).
 * Every checkpoint: report fungal, contaminant and unassigned bp and the number of contaminant contigs.
-* Compare the contig set before purging (`cp02`) vs. after purging (`cp03`), matched by contig name:
+* Compare the contig set before purging (`cp02`) vs. after each purge step (`cp03` taxpurge / fcs_gx_purge; `cp04` covpurge, cumulative), matched by contig name:
   * **True Positive (TP, bp):** contaminant contig bases successfully removed.
   * **False Negative (FN, bp):** contaminant contig bases remaining in the purged assembly.
   * **False Positive (FP, bp):** fungal contig bases mistakenly removed.
