@@ -59,6 +59,19 @@ def safeKey(name) {
 }
 
 // one meta map + reference per row of sim_samples.tsv (origin 'sim') or real_samples.tsv (origin 'real')
+// AAFTF commit pinned in pixi.lock. Referenced as params.aaftf_commit in every AAFTF job script, so changing
+// the pin (pixi.toml + pixi lock) reruns exactly the AAFTF jobs and what depends on them on the next -resume.
+def aaftfCommit() {
+    def lock = file("${projectDir}/../pixi.lock")
+    def m = lock.exists() ? (lock.text =~ /AAFTF\.git[^#\s]*#([0-9a-f]{40})/) : null
+    m ? m[0][1] : 'unknown'
+}
+
+// TSV rows whose first column (organism) starts with '#' are commented out and skipped
+def activeRow(r) {
+    !(r.organism ?: '').trim().startsWith('#')
+}
+
 def optFile(x) {
     x ? file(x) : null
 }
@@ -96,7 +109,7 @@ def fileSig(f) {
 
 def simHash(m, pct, kind) {
     // contaminant FASTAs: the `reference` column, looked up by name (column order may change)
-    def lines = file(params.contaminants).readLines().findAll { l -> l.trim() }
+    def lines = file(params.contaminants).readLines().findAll { l -> l.trim() && !l.trim().startsWith('#') }
     def ref_col = lines[0].split('\t', -1).toList().indexOf('reference')
     def contam_refs = lines.drop(1).collect { l -> l.split('\t', -1)[ref_col] }
     def parts = [kind, pct, fileSig(m.source_reference), fileSig(params.contaminants)] + contam_refs.collect { f -> fileSig(f) } + [params.group_weights, file("${projectDir}/scripts/format_reference_headers.py").text]
@@ -119,6 +132,10 @@ def reusableReads(m, pct, kind) {
 }
 
 // ================================================================ data generation
+
+params.aaftf_commit = aaftfCommit()
+// pixi manifest, used by TOOL_VERSIONS to query the QUAST / BUSCO environments
+params.pixi_manifest = "${projectDir}/../pixi.toml"
 
 process TAG_FUNGAL_REF {
     tag "${meta.sample}"
@@ -306,6 +323,7 @@ process CLEAN_READS {
     def cp = 'cp01_spades_asm'
     def seed = meta.mito_seed ? "-s ${meta.mito_seed}" : ''
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} ${cp} trim \\
         AAFTF trim --method ${params.trim_method} -c ${task.cpus} -1 ${reads[0]} -2 ${reads[1]} -o reads_trimmed
     # NOVOPlasty fails when the reference has no mitochondrial contig; then filter runs without it
@@ -332,6 +350,7 @@ process CP01_SPADES_ASM {
 
     script:
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp01_spades_asm assemble \\
         AAFTF assemble -1 ${reads[0]} -2 ${reads[1]} \\
         -c ${task.cpus} -m ${task.memory.toGiga()} --method spades -o ${meta.id}.cp01.fasta
@@ -351,6 +370,7 @@ process CP01_FLYE_ASM {
 
     script:
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp01_flye_asm assemble \\
         AAFTF assemble --method flye -lr ${reads} --longread_type ${meta.longread_type ?: params.longread_type} \\
         --genome_size ${meta.genome_size} -c ${task.cpus} -m ${task.memory.toGiga()} -o ${meta.id}.cp01.fasta
@@ -370,6 +390,7 @@ process CP02_VECSCREEN {
 
     script:
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp02_vecscreen vecscreen \\
         AAFTF vecscreen -i ${asm} -c ${task.cpus} -o ${meta.id}.cp02.fasta
     """
@@ -388,6 +409,7 @@ process CP03_TAXPURGE {
 
     script:
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp03_purged_taxpurge taxpurge \\
         AAFTF taxpurge -i ${asm} -c ${task.cpus} -p ${meta.phylum} -o ${meta.id}.cp03_taxpurge.fasta
     """
@@ -406,6 +428,7 @@ process CP03_FCSGX {
 
     script:
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp03_purged_fcsgx fcs_gx_purge \\
         AAFTF fcs_gx_purge -i ${asm} -c ${task.cpus} -d ${params.fcs_gx_db} -t ${meta.taxid} -o fcsgx
     mv fcsgx/*.fcsgx_cleaned.fasta ${meta.id}.cp03_fcsgx.fasta
@@ -427,6 +450,7 @@ process CP04_COVPURGE {
     script:
     branch = cp.tokenize('_')[-1]
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp04_covpurge_${branch} covpurge \\
         AAFTF covpurge -i ${asm} -1 ${reads[0]} -2 ${reads[1]} -mc ${params.covpurge_mincovpct} -c ${task.cpus} \\
         -o ${meta.id}.cp04_${branch}.fasta
@@ -447,6 +471,7 @@ process CP05_RMDUP {
     script:
     branch = cp.tokenize('_')[-1]
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp05_rmdup_${branch} rmdup \\
         AAFTF rmdup -i ${asm} -c ${task.cpus} -ml ${params.min_contig} -o ${meta.id}.cp05_${branch}.fasta
     """
@@ -469,6 +494,7 @@ process CP06_POLISH {
     def c = "cp06_polished_${branch}"
     def hybrid = meta.track == 'hybrid'
     """
+    # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} ${c} polish_racon \\
         AAFTF polish -i ${asm} -lr ${longreads} --method racon -c ${task.cpus} -m ${task.memory.toGiga()} -o racon.fasta
     ${hybrid
@@ -582,6 +608,42 @@ process DECON_METRICS {
     """
 }
 
+// versions of the tools that produced the results (for the methods section), written once per run
+process TOOL_VERSIONS {
+    publishDir params.outdir, mode: 'copy'
+
+    output:
+    path 'versions.tsv'
+
+    script:
+    """
+    # first version-like token of a command's output, NA if the tool is missing
+    ver() { local out; out=\$("\$@" 2>&1 || true); awk 'match(\$0, /[0-9]+\\.[0-9]+[0-9A-Za-z.+_-]*/) { print substr(\$0, RSTART, RLENGTH); found = 1; exit } END { if (!found) print "NA" }' <<< "\$out"; }
+    # tools of the eval / busco pixi environments (QUAST, BUSCO): only the line naming the tool, since pixi
+    # prints its own messages first; NA when pixi is not used
+    ver_env() { local env=\$1 name=\$2; shift 2; ver grep -i -m1 "\$name" <<< "\$(pixi run --manifest-path ${params.pixi_manifest} -e \$env "\$@" 2>&1 || true)"; }
+    {
+        printf "tool\\tversion\\n"
+        printf "AAFTF commit (pixi.lock)\\t%s\\n" "${params.aaftf_commit}"
+        printf "AAFTF\\t%s\\n" "\$(ver AAFTF --version)"
+        printf "Nextflow\\t%s\\n" "${nextflow.version}"
+        printf "SPAdes\\t%s\\n" "\$(ver spades.py --version)"
+        printf "Flye\\t%s\\n" "\$(ver flye --version)"
+        printf "minimap2\\t%s\\n" "\$(ver minimap2 --version)"
+        printf "Racon\\t%s\\n" "\$(ver racon --version)"
+        printf "Polypolish\\t%s\\n" "\$(ver polypolish --version)"
+        printf "BBTools (bbduk)\\t%s\\n" "\$(ver bbduk.sh --version)"
+        printf "BLAST+\\t%s\\n" "\$(ver blastn -version)"
+        printf "sourmash\\t%s\\n" "\$(ver sourmash --version)"
+        printf "samtools\\t%s\\n" "\$(ver samtools --version)"
+        printf "InSilicoSeq\\t%s\\n" "\$(ver iss --version)"
+        printf "Badread\\t%s\\n" "\$(ver badread --version)"
+        printf "QUAST\\t%s\\n" "\$(ver_env eval quast quast.py --version)"
+        printf "BUSCO\\t%s\\n" "\$(ver_env busco busco busco --version)"
+    } > versions.tsv
+    """
+}
+
 process AGGREGATE_RESULTS {
     publishDir params.outdir, mode: 'copy'
 
@@ -639,10 +701,10 @@ workflow {
 
     // ---- references: simulated samples (sim_samples.tsv) and real datasets (real_samples.tsv)
     // sim_rows / real_rows: (meta, downloaded reference FASTA), one per row of sim_samples.tsv / real_samples.tsv
-    sim_rows = channel.fromPath(params.sim_samples).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'sim') }
+    sim_rows = channel.fromPath(params.sim_samples).splitCsv(header: true, sep: '\t').filter { r -> activeRow(r) }.map { r -> sampleRow(r, 'sim') }
     def real_tsv = params.real_samples ? file(params.real_samples) : null
     real_rows = real_tsv && real_tsv.exists()
-        ? channel.fromPath(real_tsv).splitCsv(header: true, sep: '\t').map { r -> sampleRow(r, 'real') }
+        ? channel.fromPath(real_tsv).splitCsv(header: true, sep: '\t').filter { r -> activeRow(r) }.map { r -> sampleRow(r, 'real') }
         : channel.empty()
     // tagged_refs: (meta, tagged reference FASTA, headers FUNGUS_*) for every sample; a process can only be
     // called once, so simulated and real samples go through TAG_FUNGAL_REF together and are split again:
@@ -653,7 +715,7 @@ workflow {
 
     // contam_refs: (taxon key, group, tagged contaminant FASTA, headers CONTAM_<taxon>_*), one per contaminants.tsv row
     contam_refs = TAG_CONTAM_REF(
-        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').map { r -> tuple(safeKey(r.organism), r.group, r.accessions ?: '', file(r.reference)) }
+        channel.fromPath(params.contaminants).splitCsv(header: true, sep: '\t').filter { r -> activeRow(r) }.map { r -> tuple(safeKey(r.organism), r.group, r.accessions ?: '', file(r.reference)) }
     )
     // contam_panel: a single item (['taxon:group', ...], [contaminant FASTAs]) with the whole panel,
     // combined with every simulation job
@@ -869,6 +931,8 @@ workflow {
     )
 
     // AGGREGATE_RESULTS waits for everything above and writes final_report.tsv and the summary tables
+    TOOL_VERSIONS()
+
     AGGREGATE_RESULTS(
         eval_aliases,
         quast_dirs.collect(),

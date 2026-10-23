@@ -9,6 +9,7 @@ platforms = ["linux-64"]
 #   default : Nextflow, AAFTF and its tools, read simulators, helper scripts
 #   eval    : QUAST
 #   busco   : BUSCO (+ miniprot)
+#   plot    : Jupyter, pandas, seaborn, matplotlib for notebooks/benchmark_report.ipynb
 # Run from the repository root:
 #   pixi install --all
 #   pixi run nextflow run workflow/main.nf -params-file config/params.yaml -profile pixi,slurm
@@ -64,19 +65,33 @@ unzip = "*"
 time = "*"                     # GNU time for workflow/scripts/timeit.sh
 
 [feature.eval.dependencies]
+python = ">=3.9,<3.12"           # QUAST 5.3 imports distutils, removed in Python 3.12
 quast = ">=5.2"
 
 [feature.busco.dependencies]
 busco = ">=6.1,<7"              # v6 for OrthoDB v12.2 lineages (-m genome --miniprot)
 miniprot = "*"
 
+[feature.plot.dependencies]
+python = ">=3.12,<3.14"
+pandas = ">=2"
+seaborn = ">=0.13"
+matplotlib-base = ">=3.8"
+jupyterlab = ">=4"
+nbconvert = ">=7"
+ipykernel = "*"
+
+[feature.plot.tasks]
+notebook = { cmd = "jupyter lab notebooks/benchmark_report.ipynb", description = "Open the results notebook (pixi run -e plot notebook)" }
+
 [environments]
 eval = { features = ["eval"], no-default-feature = true }
+plot = { features = ["plot"], no-default-feature = true }
 busco = { features = ["busco"], no-default-feature = true }
 
 [pypi-dependencies]
 # pipeline_* / taxpurge / covpurge are newer than the bioconda release; pin the commit you benchmark
-aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "9ce56a1" }
+aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "ccd6c26" }
 
 [tasks]
 fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/sim_samples.tsv" }

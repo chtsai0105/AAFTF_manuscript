@@ -23,7 +23,7 @@ c_taxon=$(col organism) c_ref=$(col reference) c_acc=$(col accessions)
 # cut keeps empty fields (bash `read` would merge consecutive tabs and shift the columns)
 field() { cut -f"$1" <<< "$2"; }
 
-tail -n +2 "$tsv" | while IFS= read -r line; do
+tail -n +2 "$tsv" | awk '!/^[[:space:]]*#/' | while IFS= read -r line; do
     taxon=$(field "$c_taxon" "$line") fa=$(field "$c_ref" "$line")
     ids=$(field "$c_acc" "$line" | sed -E 's/:[0-9.]+//g; s/ //g')
     [[ -n $taxon ]] || continue
@@ -48,6 +48,6 @@ tail -n +2 "$tsv" | while IFS= read -r line; do
 done
 
 echo "contaminant references:"
-tail -n +2 "$tsv" | while IFS= read -r line; do
+tail -n +2 "$tsv" | awk '!/^[[:space:]]*#/' | while IFS= read -r line; do
     printf "  %-34s %s bp\n" "$(field "$c_taxon" "$line")" "$(grep -v '^>' "$(field "$c_ref" "$line")" | tr -d '\n' | wc -c)"
 done

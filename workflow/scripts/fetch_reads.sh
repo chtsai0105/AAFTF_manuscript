@@ -9,7 +9,7 @@
 # Several runs are concatenated. Rows whose target files already exist (non-empty) are skipped
 # (--force re-downloads them); rows without SRA runs must point to local FASTQ files.
 # The same-strain references are downloaded with: workflow/scripts/fetch_samples.sh config/real_samples.tsv
-# Run from the repository root. Set THREADS (default 4) for fasterq-dump / pigz.
+# Rows starting with '#' are commented out and skipped. Run from the repository root. Set THREADS (default 4) for fasterq-dump / pigz.
 set -euo pipefail
 
 force=0
@@ -48,7 +48,7 @@ dump() {
     for o in "${outs[@]}"; do mv "$o.tmp" "$o"; done
 }
 
-tail -n +2 "$tsv" | while IFS= read -r line; do
+tail -n +2 "$tsv" | awk '!/^[[:space:]]*#/' | while IFS= read -r line; do
     name=$(field organism "$line"); [[ -n $name ]] || continue
     r1=$(field read1 "$line") r2=$(field read2 "$line") lr=$(field longreads "$line")
     s_short=$(field sra_short "$line" | tr -d ' ') s_long=$(field sra_long "$line" | tr -d ' ')

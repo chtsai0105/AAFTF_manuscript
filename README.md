@@ -99,6 +99,7 @@ Jobs go to the `partition` in `config/params.yaml` (default `epyc`); FCS-GX goes
 | `results/precision_recall_f1.tsv` | contig composition of every checkpoint; precision / recall / F1 for the purge steps (cp03, cp04) |
 | `results/time_summary.tsv` | run time, peak memory and exit status of every assembler / AAFTF command |
 | `results/read_composition.tsv` | the actual fungal / contaminant amounts in each simulated read set |
+| `results/versions.tsv` | versions of AAFTF (pinned commit) and the other tools used in the run |
 | `results/01_checkpoints/` | the assembly after every step |
 | `results/02_quast/`, `03_completeness/`, `04_decontamination/` | raw QUAST, BUSCO and minimap2 outputs |
 | `results/05_dotplots/` | PAF + index files per checkpoint for interactive dot plots in [D-GENIES](https://dgenies.toulouse.inra.fr/) ("Plot alignment") |
@@ -118,5 +119,8 @@ Datasets are named `<sample>_spike<pct>_<track>` (simulated) or `<sample>_real_<
   reused on later runs while the settings are unchanged (`reuse_reads`).
 - **Real datasets** run the same checkpoints and QUAST / BUSCO, but get no precision / recall: there is no answer key
   for which contigs are contaminants.
+- **Updating AAFTF.** AAFTF is pinned to a commit in `pixi.toml`. After changing it (and running `pixi lock`),
+  `-resume` reruns every AAFTF step and what depends on it, because each AAFTF job records the pinned commit.
+  Other tool updates do not trigger reruns; check `results/versions.tsv`, or run without `-resume`.
 - **Shared evaluation.** Checkpoints with identical sequences (e.g. a step that removed nothing) are evaluated once; the
   report marks them with `same_sequences_as`.

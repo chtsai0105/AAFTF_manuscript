@@ -10,7 +10,7 @@
 # An optional ':<copies>' suffix (copies per nuclear genome, used by the read simulators, e.g. for
 # the mitochondrion) is ignored here. Rows whose reference already exists as a non-empty FASTA are
 # skipped (--force re-downloads them); rows without accessions must point to a local FASTA.
-# Run from the repository root. Set NCBI_API_KEY to raise the rate limit.
+# Rows starting with '#' are commented out and skipped. Run from the repository root. Set NCBI_API_KEY to raise the rate limit.
 set -euo pipefail
 
 force=0
@@ -43,7 +43,7 @@ fetch_nuccore() {    # $1 accession, $2 output fasta (appended)
 # cut keeps empty fields (bash `read` would merge consecutive tabs and shift the columns)
 field() { cut -f"$1" <<< "$2"; }
 
-tail -n +2 "$tsv" | while IFS= read -r line; do
+tail -n +2 "$tsv" | awk '!/^[[:space:]]*#/' | while IFS= read -r line; do
     name=$(field "$c_name" "$line") fa=$(field "$c_ref" "$line")
     accs=$(field "$c_acc" "$line" | sed -E 's/:[0-9.]+//g; s/ //g')
     [[ -n $name ]] || continue
@@ -70,7 +70,7 @@ tail -n +2 "$tsv" | while IFS= read -r line; do
 done
 
 echo "sample references (compare with the genome_size column):"
-tail -n +2 "$tsv" | while IFS= read -r line; do
+tail -n +2 "$tsv" | awk '!/^[[:space:]]*#/' | while IFS= read -r line; do
     fa=$(field "$c_ref" "$line")
     printf "  %-32s %5d sequences  %12s bp\n" "$(field "$c_name" "$line")" "$(grep -c '^>' "$fa")" "$(grep -v '^>' "$fa" | tr -d '\n' | wc -c)"
 done
