@@ -30,6 +30,7 @@ filter_aligner: bbduk
 min_contig:     500
 covpurge_mincovpct: 5               # covpurge: drop contigs below this % of the N50 contigs' mean coverage
 fcs_gx_db:      /srv/projects/db/ncbi-fcs/0.5.4/gxdb/all  # e.g. /dev/shm/gxdb/all; branch B is skipped when null
+fcs_screen:     true               # NCBI FCS-adaptor as a comparison branch to vecscreen at cp02 (needs Singularity)
 
 # evaluation
 # OrthoDB v12.2 lineages (lineage column in sim_samples.tsv, e.g. sordariomycetes_odb12.2)

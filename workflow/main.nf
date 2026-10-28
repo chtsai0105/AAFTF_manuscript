@@ -49,6 +49,8 @@ params.min_contig = 500
 // covpurge: remove contigs below this % of the N50 contigs' mean coverage (AAFTF default 5)
 params.covpurge_mincovpct = 5
 params.fcs_gx_db = null
+// NCBI FCS-adaptor (AAFTF fcs_screen) as a comparison branch to vecscreen at cp02 (needs Singularity)
+params.fcs_screen = true
 // BUSCO download folder (<dir>/lineages/<lineage>; read-only is fine, used with --offline)
 params.busco_downloads = null
 
@@ -396,6 +398,28 @@ process CP02_VECSCREEN {
     """
 }
 
+// NCBI FCS-adaptor screen, compared with vecscreen at cp02; this branch is not continued to cp03-cp06.
+// The run_fcsadaptor.sh script and container image come from the AAFTF databases (AAFTF_DB).
+process CP02_FCS_SCREEN {
+    tag "${meta.id}"
+    module 'singularity'
+    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
+
+    input:
+    tuple val(meta), val(_cp), path(asm)
+
+    output:
+    tuple val(meta), val('cp02_fcs_screen'), path("${meta.id}.cp02_fcs.fasta"), emit: fasta
+    path ("*.time.tsv"), emit: times
+
+    script:
+    """
+    # AAFTF ${params.aaftf_commit}
+    timeit.sh ${meta.id} cp02_fcs_screen fcs_screen \\
+        AAFTF fcs_screen -i ${asm} -o ${meta.id}.cp02_fcs.fasta
+    """
+}
+
 process CP03_TAXPURGE {
     tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
@@ -621,8 +645,9 @@ process DECON_METRICS {
 
     script:
     // confusion matrix only for the purge step (cp02 → cp03); composition for every checkpoint
-    // purge steps (cp03 taxpurge / fcs_gx_purge, cp04 covpurge) get the confusion matrix, cumulative from cp02
-    def before = cp ==~ /cp0[34]_.*/ ? "--before_fasta ${before_asm} --before_paf ${before_paf}" : ''
+    // confusion matrix for the screens (cp02 vecscreen / fcs_screen, vs cp01) and the purge steps (cp03 taxpurge /
+    // fcs_gx_purge, cp04 covpurge; cumulative from cp02); the 'before' input is chosen in the workflow
+    def before = cp ==~ /cp0[234]_.*/ ? "--before_fasta ${before_asm} --before_paf ${before_paf}" : ''
     """
     calculate_decon_metrics.py --dataset ${meta.id} --checkpoint ${cp} --fasta ${asm} --paf ${paf} ${before} \\
         -o ${meta.id}__${cp}.precision_recall_f1.tsv
@@ -863,6 +888,14 @@ workflow {
     // → cp05 rmdup → cp06 polish (long, hybrid). The long track has no Illumina reads, so no cp04.
     // cp02.fasta, cp03_taxpurge.fasta: (dataset meta, cp, FASTA)
     cp02 = CP02_VECSCREEN(cp01_assemblies)
+    // cp02_fcs: (dataset meta, 'cp02_fcs_screen', FASTA); FCS-adaptor on the same cp01 assemblies, compared
+    // with vecscreen at cp02 only (cp03-cp06 continue from vecscreen)
+    // toString(): --fcs_screen false on the command line arrives as the text 'false'
+    if (params.fcs_screen.toString() == 'true') {
+        cp02_fcs = CP02_FCS_SCREEN(cp01_assemblies)
+        checkpoints = checkpoints.mix(cp02_fcs.fasta)
+        timing_tsvs = timing_tsvs.mix(cp02_fcs.times)
+    }
     cp03_taxpurge = CP03_TAXPURGE(cp02.fasta)
     // cp03: the taxpurge result, which the later steps (cp04-cp06) continue from
     cp03 = cp03_taxpurge.fasta
@@ -959,10 +992,19 @@ workflow {
     // cp02_combined_paf: (dataset id, cp02 FASTA, cp02 PAF), the 'before' state for every checkpoint of that dataset;
     // hybrid datasets share cp01-cp03 with their long dataset, so they are compared with its cp02
     cp02_combined_paf = combined_paf.filter { _m, cp, _a, _p -> cp == 'cp02_vecscreen' }.map { m, _cp, a, p -> tuple(m.id, a, p) }
+    // cp01_combined_paf: (dataset id, cp01 FASTA, cp01 PAF), the 'before' state of the two cp02 screens
+    // (vecscreen, fcs_screen), so both are scored on the same input
+    cp01_combined_paf = combined_paf.filter { _m, cp, _a, _p -> cp ==~ /cp01_.*/ }.map { m, _cp, a, p -> tuple(m.id, a, p) }
     // decon_tsvs: one <dataset>__<cp>.precision_recall_f1.tsv per checkpoint
     decon_tsvs = DECON_METRICS(
-        combined_paf.map { m, cp, a, p -> tuple(m.id.replaceAll('_hybrid$', '_long'), m, cp, a, p) }
-            .combine(cp02_combined_paf, by: 0)
+        combined_paf.filter { _m, cp, _a, _p -> cp ==~ /cp02_.*/ }
+            .map { m, cp, a, p -> tuple(m.id, m, cp, a, p) }
+            .combine(cp01_combined_paf, by: 0)
+            .mix(
+                combined_paf.filter { _m, cp, _a, _p -> !(cp ==~ /cp02_.*/) }
+                    .map { m, cp, a, p -> tuple(m.id.replaceAll('_hybrid$', '_long'), m, cp, a, p) }
+                    .combine(cp02_combined_paf, by: 0)
+            )
             .map { _id, m, cp, a, p, before_a, before_p -> tuple(m, cp, a, p, before_a, before_p) }
     )
 

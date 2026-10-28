@@ -108,7 +108,8 @@ Datasets are named `<sample>_spike<pct>_<track>` (simulated) or `<sample>_real_<
 
 ### Notes
 
-- **Checkpoints.** cp00 raw SPAdes, cp01 assembly, cp02 vecscreen, cp03 taxpurge (and, when `fcs_gx_db` is set, `fcs_gx_purge` as a
+- **Checkpoints.** cp00 raw SPAdes, cp01 assembly, cp02 vecscreen (and NCBI FCS-adaptor, `fcs_screen`, as a comparison
+  branch that stops at cp02), cp03 taxpurge (and, when `fcs_gx_db` is set, `fcs_gx_purge` as a
   comparison branch that stops at cp03), cp04 covpurge, cp05 rmdup, cp06 polishing. A number always means the same step; tracks skip steps they
   cannot run (no cp04 without Illumina reads, no polishing on the short track, as in `AAFTF pipeline_short`).
 - **Contaminants.** Bacteria (*Ralstonia pickettii*, *Cutibacterium acnes*), human (chr21 + mitochondrion), vectors

@@ -157,6 +157,7 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
 
 3. **`cp02_vecscreen`**:
    * `AAFTF vecscreen -i {cp01.fasta} -c {threads} -o {dataset}.cp02.fasta`
+   * Comparison branch (`fcs_screen: true`): `AAFTF fcs_screen -i {cp01.fasta} -o {dataset}.cp02_fcs.fasta` (NCBI FCS-adaptor, Singularity). It stops at cp02: both screens are evaluated and scored against their cp01 input (contigs removed); trimming and splitting show in QUAST, BUSCO and the dot plots. cp03–cp06 continue from vecscreen.
 
 4. **`cp03_purged_{taxpurge,fcsgx}`**:
    * Branch A: `AAFTF taxpurge -i {cp02.fasta} -c {threads} -p {phylum} -o {dataset}.cp03_taxpurge.fasta`
