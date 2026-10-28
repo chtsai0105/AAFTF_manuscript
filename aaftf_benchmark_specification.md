@@ -138,7 +138,7 @@ No plant host is included: the samples are pure-culture lab strains. Organelle c
 ## 4. Execution Tracks & Checkpoint Definitions
 
 ### Track 1: Sequential Ablation Pipeline
-For each dataset, the intermediate FASTA after every step is saved to `results/01_checkpoints/{dataset}/` to isolate the value of each AAFTF command. Checkpoint numbers mean the same step in every track (the long track has no cp04, as it has no Illumina reads). The long and hybrid tracks share one assembly and cp02–cp03 (labelled `_long`) and split at cp04.
+For each dataset, the intermediate FASTA after every step is saved as `results/01_checkpoints/{dataset}/{dataset}.{checkpoint}.fasta` to isolate the value of each AAFTF command. Checkpoint numbers mean the same step in every track (the long track has no cp04, as it has no Illumina reads). The long and hybrid tracks share one assembly and cp02–cp03 (labelled `_long`) and split at cp04.
 
 1. **`cp00_raw_baseline`** (short only): standard raw assembler without AAFTF pre-filtering or post-processing:
    ```bash
@@ -150,26 +150,26 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
    * `AAFTF trim --method bbduk -c {threads} -1 {R1} -2 {R2} -o reads_trimmed` → `reads_trimmed_1P/_2P.fastq.gz`
    * `AAFTF mito -1 reads_trimmed_1P.fastq.gz -2 reads_trimmed_2P.fastq.gz [-s {mito_seed}] -o mito_assembly.fasta` (a failure is tolerated)
    * `AAFTF filter -1 ... -2 ... --aligner bbduk -c {threads} -o reads_filtered [-s mito_assembly.fasta]` → `reads_filtered_filtered_1/_2.fastq.gz`
-   * `AAFTF assemble -1 reads_filtered_filtered_1.fastq.gz -2 ..._2.fastq.gz -c {threads} --method spades -o {dataset}.cp01.fasta`
+   * `AAFTF assemble -1 reads_filtered_filtered_1.fastq.gz -2 ..._2.fastq.gz -c {threads} --method spades -o {dataset}.cp01_spades_asm.fasta`
 
    **`cp01_flye_asm`** (long / hybrid):
-   * `AAFTF assemble --method flye -lr {ont.fastq.gz} --longread_type nano-hq --genome_size {genome_size} -c {threads} -o {dataset}.cp01.fasta`
+   * `AAFTF assemble --method flye -lr {ont.fastq.gz} --longread_type nano-hq --genome_size {genome_size} -c {threads} -o {dataset}.cp01_flye_asm.fasta`
 
 3. **`cp02_vecscreen`**:
-   * `AAFTF vecscreen -i {cp01.fasta} -c {threads} -o {dataset}.cp02.fasta`
-   * Comparison branch (`fcs_screen: true`): `AAFTF fcs_screen -i {cp01.fasta} -o {dataset}.cp02_fcs.fasta` (NCBI FCS-adaptor, Singularity). It stops at cp02: both screens are evaluated and scored against their cp01 input (contigs removed); trimming and splitting show in QUAST, BUSCO and the dot plots. cp03–cp06 continue from vecscreen.
+   * `AAFTF vecscreen -i {cp01.fasta} -c {threads} -o {dataset}.cp02_vecscreen.fasta`
+   * Comparison branch (`fcs_screen: true`): `AAFTF fcs_screen -i {cp01.fasta} -o {dataset}.cp02_fcs_screen.fasta` (NCBI FCS-adaptor, Singularity). It stops at cp02: both screens are evaluated and scored against their cp01 input (contigs removed); trimming and splitting show in QUAST, BUSCO and the dot plots. cp03–cp06 continue from vecscreen.
 
-4. **`cp03_purged_{taxpurge,fcsgx}`**:
+4. **`cp03_taxpurge`** (comparison branch: **`cp03_fcsgx`**):
    * Branch A: `AAFTF taxpurge -i {cp02.fasta} -c {threads} -p {phylum} -o {dataset}.cp03_taxpurge.fasta`
    * Branch B (only with `fcs_gx_db`): `AAFTF fcs_gx_purge -i {all cp02.fasta of one taxid} -c {threads} -d {local copy of fcs_gx_db} -t {taxid} -o fcsgx/`. One job for all assemblies of the run (on the `fcsgx_partition`): the ~470 GB database is copied once to node-local `$TMPDIR` and `fcs_gx_purge` runs once per taxid. This branch stops at cp03: it is evaluated and compared with taxpurge, and cp04–cp06 continue from taxpurge only.
 
-5. **`cp04_covpurge_{branch}`** (short and hybrid; as in `AAFTF pipeline_short` / `pipeline_hybrid`):
-   * `AAFTF covpurge -i {cp03.fasta} -1/-2 {filtered Illumina reads} -mc 5 -c {threads} -o {dataset}.cp04_{branch}.fasta` (removes contigs below 5% of the N50 contigs' mean read coverage; `covpurge_mincovpct`)
+5. **`cp04_covpurge`** (short and hybrid; as in `AAFTF pipeline_short` / `pipeline_hybrid`):
+   * `AAFTF covpurge -i {cp03.fasta} -1/-2 {filtered Illumina reads} -mc 5 -c {threads} -o {dataset}.cp04_covpurge.fasta` (removes contigs below 5% of the N50 contigs' mean read coverage; `covpurge_mincovpct`)
 
-6. **`cp05_rmdup_{branch}`**:
-   * `AAFTF rmdup -i {cp04.fasta, or cp03 for long} -c {threads} -ml 500 -o {dataset}.cp05_{branch}.fasta`
+6. **`cp05_rmdup`**:
+   * `AAFTF rmdup -i {cp04.fasta, or cp03 for long} -c {threads} -ml 500 -o {dataset}.cp05_rmdup.fasta`
 
-7. **cp06_polished_{branch}** (long and hybrid only; the short track ends at cp05, as `AAFTF pipeline_short` does not polish):
+7. **`cp06_polished`** (long and hybrid only; the short track ends at cp05, as `AAFTF pipeline_short` does not polish):
    * long: `AAFTF polish --method racon -lr {ont}`
    * hybrid: `AAFTF polish --method racon -lr {ont}` → `AAFTF polish --method polypolish -1/-2 {filtered Illumina reads}`
 

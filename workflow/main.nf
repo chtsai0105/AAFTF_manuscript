@@ -8,14 +8,15 @@
  *   3. Ablation checkpoints per dataset (track 'short'):
  *        cp00_raw_baseline        spades.py --isolate on raw reads
  *        cp01_spades_asm          AAFTF trim → mito → filter (CLEAN_READS), then assemble with SPAdes
- *        cp02_vecscreen           AAFTF vecscreen
- *        cp03_purged_{taxpurge,fcsgx}   branch A: AAFTF taxpurge | branch B: AAFTF fcs_gx_purge
- *        cp04_covpurge_{branch}   AAFTF covpurge (filtered Illumina reads)
- *        cp05_rmdup_{branch}      AAFTF rmdup
+ *        cp02_vecscreen           AAFTF vecscreen      (comparison branch, stops here: cp02_fcs_screen, AAFTF fcs_screen)
+ *        cp03_taxpurge            AAFTF taxpurge       (comparison branch, stops here: cp03_fcsgx, AAFTF fcs_gx_purge)
+ *        cp04_covpurge            AAFTF covpurge (filtered Illumina reads)
+ *        cp05_rmdup               AAFTF rmdup
  *      --tracks (short,long,hybrid) picks which tracks run per sample × spike level (ONT assembled with AAFTF assemble --method flye):
- *        long:   cp01 flye → cp02 vecscreen → cp03 purge → cp05 rmdup → cp06 polish (racon); no cp04 (no Illumina reads)
+ *        long:   cp01_flye_asm → cp02 → cp03 → cp05 → cp06_polished (racon); no cp04 (no Illumina reads)
  *        hybrid: cp01-cp03 shared with 'long'; then cp04 covpurge and cp05 rmdup with its own Illumina reads,
- *                cp06 = racon, then polypolish with the filtered Illumina reads of the same dataset
+ *                cp06_polished = racon, then polypolish with the filtered Illumina reads of the same dataset
+ * Each checkpoint FASTA is named <dataset>.<checkpoint>.fasta; one end-to-end path per dataset (vecscreen → taxpurge).
  *   4. Evaluate every checkpoint: QUAST, BUSCO (miniprot), minimap2 vs the combined FASTA,
  *      minimap2 PAF vs the reference for D-GENIES dot plots
  *   5. Aggregate into results/final_report.tsv
@@ -299,14 +300,14 @@ process CP00_RAW_BASELINE {
     tuple val(meta), path(reads)
 
     output:
-    tuple val(meta), val('cp00_raw_baseline'), path("${meta.id}.cp00.fasta"), emit: fasta
+    tuple val(meta), val('cp00_raw_baseline'), path("${meta.id}.cp00_raw_baseline.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     """
     timeit.sh ${meta.id} cp00_raw_baseline spades \\
         spades.py -1 ${reads[0]} -2 ${reads[1]} --isolate -o spades -t ${task.cpus} -m ${task.memory.toGiga()}
-    cp spades/scaffolds.fasta ${meta.id}.cp00.fasta
+    cp spades/scaffolds.fasta ${meta.id}.cp00_raw_baseline.fasta
     """
 }
 
@@ -347,7 +348,7 @@ process CP01_SPADES_ASM {
     tuple val(meta), path(reads)
 
     output:
-    tuple val(meta), val('cp01_spades_asm'), path("${meta.id}.cp01.fasta"), emit: fasta
+    tuple val(meta), val('cp01_spades_asm'), path("${meta.id}.cp01_spades_asm.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
@@ -355,7 +356,7 @@ process CP01_SPADES_ASM {
     # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp01_spades_asm assemble \\
         AAFTF assemble -1 ${reads[0]} -2 ${reads[1]} \\
-        -c ${task.cpus} -m ${task.memory.toGiga()} --method spades -o ${meta.id}.cp01.fasta
+        -c ${task.cpus} -m ${task.memory.toGiga()} --method spades -o ${meta.id}.cp01_spades_asm.fasta
     """
 }
 
@@ -367,7 +368,7 @@ process CP01_FLYE_ASM {
     tuple val(meta), path(reads)
 
     output:
-    tuple val(meta), val('cp01_flye_asm'), path("${meta.id}.cp01.fasta"), emit: fasta
+    tuple val(meta), val('cp01_flye_asm'), path("${meta.id}.cp01_flye_asm.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
@@ -375,7 +376,7 @@ process CP01_FLYE_ASM {
     # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp01_flye_asm assemble \\
         AAFTF assemble --method flye -lr ${reads} --longread_type ${meta.longread_type ?: params.longread_type} \\
-        --genome_size ${meta.genome_size} -c ${task.cpus} -m ${task.memory.toGiga()} -o ${meta.id}.cp01.fasta
+        --genome_size ${meta.genome_size} -c ${task.cpus} -m ${task.memory.toGiga()} -o ${meta.id}.cp01_flye_asm.fasta
     """
 }
 
@@ -387,14 +388,14 @@ process CP02_VECSCREEN {
     tuple val(meta), val(_cp), path(asm)
 
     output:
-    tuple val(meta), val('cp02_vecscreen'), path("${meta.id}.cp02.fasta"), emit: fasta
+    tuple val(meta), val('cp02_vecscreen'), path("${meta.id}.cp02_vecscreen.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     """
     # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp02_vecscreen vecscreen \\
-        AAFTF vecscreen -i ${asm} -c ${task.cpus} -o ${meta.id}.cp02.fasta
+        AAFTF vecscreen -i ${asm} -c ${task.cpus} -o ${meta.id}.cp02_vecscreen.fasta
     """
 }
 
@@ -409,14 +410,14 @@ process CP02_FCS_SCREEN {
     tuple val(meta), val(_cp), path(asm)
 
     output:
-    tuple val(meta), val('cp02_fcs_screen'), path("${meta.id}.cp02_fcs.fasta"), emit: fasta
+    tuple val(meta), val('cp02_fcs_screen'), path("${meta.id}.cp02_fcs_screen.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     """
     # AAFTF ${params.aaftf_commit}
     timeit.sh ${meta.id} cp02_fcs_screen fcs_screen \\
-        AAFTF fcs_screen -i ${asm} -o ${meta.id}.cp02_fcs.fasta
+        AAFTF fcs_screen -i ${asm} -o ${meta.id}.cp02_fcs_screen.fasta
     """
 }
 
@@ -428,13 +429,13 @@ process CP03_TAXPURGE {
     tuple val(meta), val(_cp), path(asm)
 
     output:
-    tuple val(meta), val('cp03_purged_taxpurge'), path("${meta.id}.cp03_taxpurge.fasta"), emit: fasta
+    tuple val(meta), val('cp03_taxpurge'), path("${meta.id}.cp03_taxpurge.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
     """
     # AAFTF ${params.aaftf_commit}
-    timeit.sh ${meta.id} cp03_purged_taxpurge taxpurge \\
+    timeit.sh ${meta.id} cp03_taxpurge taxpurge \\
         AAFTF taxpurge -i ${asm} -c ${task.cpus} -p ${meta.phylum} -o ${meta.id}.cp03_taxpurge.fasta
     """
 }
@@ -450,7 +451,7 @@ process CP03_FCSGX {
 
     input:
     val jobs                               // [[dataset id, taxid], ...]
-    path asms, stageAs: 'in/*'             // <dataset id>.cp02.fasta, same order as jobs
+    path asms, stageAs: 'in/*'             // <dataset id>.cp02_vecscreen.fasta, same order as jobs
 
     output:
     path "*.cp03_fcsgx.fasta", emit: fasta
@@ -459,8 +460,8 @@ process CP03_FCSGX {
     script:
     def db_name = file(params.fcs_gx_db).name
     def runs = jobs.groupBy { j -> j[1] }.collect { taxid, js ->
-        def inputs = js.collect { j -> "in/${j[0]}.cp02.fasta" }.join(' ')
-        "timeit.sh fcsgx_batch cp03_purged_fcsgx fcs_gx_purge_taxid${taxid} \\\n" +
+        def inputs = js.collect { j -> "in/${j[0]}.cp02_vecscreen.fasta" }.join(' ')
+        "timeit.sh fcsgx_batch cp03_fcsgx fcs_gx_purge_taxid${taxid} \\\n" +
         "        AAFTF fcs_gx_purge -i ${inputs} -c ${task.cpus} -d \"\$db\" -t ${taxid} -o fcsgx"
     }.join('\n    ')
     """
@@ -470,73 +471,70 @@ process CP03_FCSGX {
     else
         db_dir=\$(mktemp -d "\${TMPDIR:-\$PWD}/gxdb.XXXXXX")
         trap 'rm -rf "\$db_dir"' EXIT
-        timeit.sh fcsgx_batch cp03_purged_fcsgx gxdb_copy cp ${params.fcs_gx_db}.* "\$db_dir"/
+        timeit.sh fcsgx_batch cp03_fcsgx gxdb_copy cp ${params.fcs_gx_db}.* "\$db_dir"/
         db="\$db_dir/${db_name}"
     fi
     ${runs}
-    for f in fcsgx/*.cp02.fcsgx_cleaned.fasta; do
-        mv "\$f" "\$(basename "\$f" .cp02.fcsgx_cleaned.fasta).cp03_fcsgx.fasta"
+    for f in fcsgx/*.cp02_vecscreen.fcsgx_cleaned.fasta; do
+        mv "\$f" "\$(basename "\$f" .cp02_vecscreen.fcsgx_cleaned.fasta).cp03_fcsgx.fasta"
     done
     """
 }
 
 // coverage purge with the filtered Illumina reads (short and hybrid; as AAFTF pipeline_short / pipeline_hybrid)
 process CP04_COVPURGE {
-    tag "${meta.id}:${branch}"
+    tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
-    tuple val(meta), val(cp), path(asm), path(reads)
+    tuple val(meta), val(_cp), path(asm), path(reads)
 
     output:
-    tuple val(meta), val("cp04_covpurge_${branch}"), path("${meta.id}.cp04_${branch}.fasta"), emit: fasta
+    tuple val(meta), val('cp04_covpurge'), path("${meta.id}.cp04_covpurge.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
-    branch = cp.tokenize('_')[-1]
     """
     # AAFTF ${params.aaftf_commit}
-    timeit.sh ${meta.id} cp04_covpurge_${branch} covpurge \\
+    timeit.sh ${meta.id} cp04_covpurge covpurge \\
         AAFTF covpurge -i ${asm} -1 ${reads[0]} -2 ${reads[1]} -mc ${params.covpurge_mincovpct} -c ${task.cpus} \\
-        -o ${meta.id}.cp04_${branch}.fasta
+        -o ${meta.id}.cp04_covpurge.fasta
     """
 }
 
 process CP05_RMDUP {
-    tag "${meta.id}:${branch}"
+    tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
-    tuple val(meta), val(cp), path(asm)
+    tuple val(meta), val(_cp), path(asm)
 
     output:
-    tuple val(meta), val("cp05_rmdup_${branch}"), path("${meta.id}.cp05_${branch}.fasta"), emit: fasta
+    tuple val(meta), val('cp05_rmdup'), path("${meta.id}.cp05_rmdup.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
-    branch = cp.tokenize('_')[-1]
     """
     # AAFTF ${params.aaftf_commit}
-    timeit.sh ${meta.id} cp05_rmdup_${branch} rmdup \\
-        AAFTF rmdup -i ${asm} -c ${task.cpus} -ml ${params.min_contig} -o ${meta.id}.cp05_${branch}.fasta
+    timeit.sh ${meta.id} cp05_rmdup rmdup \\
+        AAFTF rmdup -i ${asm} -c ${task.cpus} -ml ${params.min_contig} -o ${meta.id}.cp05_rmdup.fasta
     """
 }
 
 // long: racon with the ONT reads; hybrid: racon, then polypolish with filtered Illumina reads
 process CP06_POLISH {
-    tag "${meta.id}:${branch}"
+    tag "${meta.id}"
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
-    tuple val(meta), val(cp), path(asm), path(longreads), path(short_reads)
+    tuple val(meta), val(_cp), path(asm), path(longreads), path(short_reads)
 
     output:
-    tuple val(meta), val("cp06_polished_${branch}"), path("${meta.id}.cp06_${branch}.fasta"), emit: fasta
+    tuple val(meta), val('cp06_polished'), path("${meta.id}.cp06_polished.fasta"), emit: fasta
     path ("*.time.tsv"), emit: times
 
     script:
-    branch = cp.tokenize('_')[-1]
-    def c = "cp06_polished_${branch}"
+    def c = "cp06_polished"
     def hybrid = meta.track == 'hybrid'
     """
     # AAFTF ${params.aaftf_commit}
@@ -547,7 +545,7 @@ process CP06_POLISH {
         AAFTF polish -i racon.fasta -1 ${short_reads[0]} -2 ${short_reads[1]} --method polypolish \\
         -c ${task.cpus} -m ${task.memory.toGiga()} -o polished.fasta"""
         : 'mv racon.fasta polished.fasta'}
-    mv polished.fasta ${meta.id}.cp06_${branch}.fasta
+    mv polished.fasta ${meta.id}.cp06_polished.fasta
     """
 }
 
@@ -727,7 +725,7 @@ process AGGREGATE_RESULTS {
 //         dataset it also gets id (<sample>_spike<pct>_<track> or <sample>_real_<track>), spike_pct ('real'
 //         for real datasets), track, tagged_ref (tagged fungal FASTA) and combined_ref (sample +
 //         contaminants FASTA; null for real datasets).
-//   cp    checkpoint name, e.g. 'cp03_purged_taxpurge'
+//   cp    checkpoint name, e.g. 'cp03_taxpurge'
 //   (a, b, ...) one channel item (tuple)
 workflow {
     // placeholder for optional path inputs (e.g. no Illumina reads for long-only polishing)
@@ -911,12 +909,12 @@ workflow {
             fcsgx_batch.map { l -> l.collect { m, _cp, _a -> [m.id, m.taxid] } },
             fcsgx_batch.map { l -> l.collect { _m, _cp, a -> a } },
         )
-        // cp03_fcsgx: (dataset meta, 'cp03_purged_fcsgx', FASTA), matched back to each dataset by file name
+        // cp03_fcsgx: (dataset meta, 'cp03_fcsgx', FASTA), matched back to each dataset by file name
         cp03_fcsgx = cp03_fcsgx_job.fasta
             .flatten()
             .map { f -> tuple(f.name.replaceAll(/\.cp03_fcsgx\.fasta$/, ''), f) }
             .join(cp02.fasta.map { m, _cp, _a -> tuple(m.id, m) })
-            .map { _id, f, m -> tuple(m, 'cp03_purged_fcsgx', f) }
+            .map { _id, f, m -> tuple(m, 'cp03_fcsgx', f) }
         checkpoints = checkpoints.mix(cp03_fcsgx)
         timing_tsvs = timing_tsvs.mix(cp03_fcsgx_job.times)
     }
@@ -934,14 +932,14 @@ workflow {
             .combine(clean_illumina_by_key, by: 0)
             .map { _k, m, cp, a, r -> tuple(toHybridMeta(m), cp, a, r) }
         : channel.empty()
-    // cp04.fasta: (short / hybrid meta, 'cp04_covpurge_<branch>', FASTA)
+    // cp04.fasta: (short / hybrid meta, 'cp04_covpurge', FASTA)
     cp04 = CP04_COVPURGE(covpurge_in_short.mix(covpurge_in_hybrid))
     timing_tsvs = timing_tsvs.mix(cp04.times)
     checkpoints = checkpoints.mix(cp04.fasta)
 
     // rmdup_in_long: (long meta, cp, FASTA); the long track goes from cp03 straight to rmdup
     rmdup_in_long = want_long ? cp03.filter { m, _cp, _a -> m.track == 'long' } : channel.empty()
-    // cp05.fasta: (meta, 'cp05_rmdup_<branch>', FASTA) for short, long and hybrid datasets
+    // cp05.fasta: (meta, 'cp05_rmdup', FASTA) for short, long and hybrid datasets
     cp05 = CP05_RMDUP(cp04.fasta.mix(rmdup_in_long))
     timing_tsvs = timing_tsvs.mix(cp05.times)
     checkpoints = checkpoints.mix(cp05.fasta)
@@ -963,7 +961,7 @@ workflow {
             .combine(ont_reads_by_key, by: 0)
             .combine(clean_illumina_by_key, by: 0)
             .map { _k, m, cp, a, lr, sr -> tuple(m, cp, a, lr, sr) }
-        // cp06.fasta: (long / hybrid meta, 'cp06_polished_<branch>', FASTA)
+        // cp06.fasta: (long / hybrid meta, 'cp06_polished', FASTA)
         cp06 = CP06_POLISH(polish_in_long.mix(polish_in_hybrid))
         timing_tsvs = timing_tsvs.mix(cp06.times)
         checkpoints = checkpoints.mix(cp06.fasta)
