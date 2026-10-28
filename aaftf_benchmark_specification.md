@@ -160,7 +160,7 @@ For each dataset, the intermediate FASTA after every step is saved to `results/0
 
 4. **`cp03_purged_{taxpurge,fcsgx}`**:
    * Branch A: `AAFTF taxpurge -i {cp02.fasta} -c {threads} -p {phylum} -o {dataset}.cp03_taxpurge.fasta`
-   * Branch B (only with `fcs_gx_db`): `AAFTF fcs_gx_purge -i {cp02.fasta} -c {threads} -d {fcs_gx_db} -t {taxid} -o fcsgx/` (runs on the `fcsgx_partition`)
+   * Branch B (only with `fcs_gx_db`): `AAFTF fcs_gx_purge -i {all cp02.fasta of one taxid} -c {threads} -d {local copy of fcs_gx_db} -t {taxid} -o fcsgx/`. One job for all assemblies of the run (on the `fcsgx_partition`): the ~470 GB database is copied once to node-local `$TMPDIR` and `fcs_gx_purge` runs once per taxid. This branch stops at cp03: it is evaluated and compared with taxpurge, and cp04–cp06 continue from taxpurge only.
 
 5. **`cp04_covpurge_{branch}`** (short and hybrid; as in `AAFTF pipeline_short` / `pipeline_hybrid`):
    * `AAFTF covpurge -i {cp03.fasta} -1/-2 {filtered Illumina reads} -mc 5 -c {threads} -o {dataset}.cp04_{branch}.fasta` (removes contigs below 5% of the N50 contigs' mean read coverage; `covpurge_mincovpct`)

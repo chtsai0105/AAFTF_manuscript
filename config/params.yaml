@@ -27,7 +27,7 @@ trim_method:    bbduk
 filter_aligner: bbduk
 min_contig:     500
 covpurge_mincovpct: 5               # covpurge: drop contigs below this % of the N50 contigs' mean coverage
-fcs_gx_db:      null               # e.g. /dev/shm/gxdb/all; branch B is skipped when null
+fcs_gx_db:      /srv/projects/db/ncbi-fcs/0.5.4/gxdb/all   # FCS-GX database prefix (matches ncbi-fcs-gx 0.5.4); null skips the FCS-GX branch
 
 # evaluation
 # OrthoDB v12.2 lineages (lineage column in sim_samples.tsv, e.g. sordariomycetes_odb12.2)

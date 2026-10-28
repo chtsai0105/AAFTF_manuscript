@@ -415,23 +415,44 @@ process CP03_TAXPURGE {
     """
 }
 
+// FCS-GX for all cp02 assemblies of the run in ONE job: the ~470 GB database is copied once to node-local
+// $TMPDIR (unless it is already on tmpfs, e.g. /dev/shm) and loaded once, then `AAFTF fcs_gx_purge` runs once
+// per taxid (it takes one -t per run) on all assemblies of that taxid. fcs_gx_db is the database prefix,
+// e.g. /srv/projects/db/ncbi-fcs/0.5.4/gxdb/all.
 process CP03_FCSGX {
-    tag "${meta.id}"
-    publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
+    tag "${jobs.size()} assemblies"
+    publishDir params.outdir, mode: 'copy', pattern: '*.fasta',
+        saveAs: { fn -> "01_checkpoints/${fn.replaceAll(/\.cp03_fcsgx\.fasta$/, '')}/${fn}" }
 
     input:
-    tuple val(meta), val(_cp), path(asm)
+    val jobs                               // [[dataset id, taxid], ...]
+    path asms, stageAs: 'in/*'             // <dataset id>.cp02.fasta, same order as jobs
 
     output:
-    tuple val(meta), val('cp03_purged_fcsgx'), path("${meta.id}.cp03_fcsgx.fasta"), emit: fasta
-    path ("*.time.tsv"), emit: times
+    path "*.cp03_fcsgx.fasta", emit: fasta
+    path "*.time.tsv", emit: times
 
     script:
+    def db_name = file(params.fcs_gx_db).name
+    def runs = jobs.groupBy { j -> j[1] }.collect { taxid, js ->
+        def inputs = js.collect { j -> "in/${j[0]}.cp02.fasta" }.join(' ')
+        "timeit.sh fcsgx_batch cp03_purged_fcsgx fcs_gx_purge_taxid${taxid} \\\n" +
+        "        AAFTF fcs_gx_purge -i ${inputs} -c ${task.cpus} -d \"\$db\" -t ${taxid} -o fcsgx"
+    }.join('\n    ')
     """
     # AAFTF ${params.aaftf_commit}
-    timeit.sh ${meta.id} cp03_purged_fcsgx fcs_gx_purge \\
-        AAFTF fcs_gx_purge -i ${asm} -c ${task.cpus} -d ${params.fcs_gx_db} -t ${meta.taxid} -o fcsgx
-    mv fcsgx/*.fcsgx_cleaned.fasta ${meta.id}.cp03_fcsgx.fasta
+    if [ "\$(stat -f -c %T "\$(dirname ${params.fcs_gx_db})")" = tmpfs ]; then
+        db=${params.fcs_gx_db}
+    else
+        db_dir=\$(mktemp -d "\${TMPDIR:-\$PWD}/gxdb.XXXXXX")
+        trap 'rm -rf "\$db_dir"' EXIT
+        timeit.sh fcsgx_batch cp03_purged_fcsgx gxdb_copy cp ${params.fcs_gx_db}.* "\$db_dir"/
+        db="\$db_dir/${db_name}"
+    fi
+    ${runs}
+    for f in fcsgx/*.cp02.fcsgx_cleaned.fasta; do
+        mv "\$f" "\$(basename "\$f" .cp02.fcsgx_cleaned.fasta).cp03_fcsgx.fasta"
+    done
     """
 }
 
@@ -840,17 +861,32 @@ workflow {
 
     // ---- cleanup: cp02 vecscreen → cp03 purge (shared by long and hybrid) → cp04 covpurge (short, hybrid)
     // → cp05 rmdup → cp06 polish (long, hybrid). The long track has no Illumina reads, so no cp04.
-    // cp02.fasta, cp03_taxpurge.fasta, cp03_fcsgx.fasta, cp03: (dataset meta, cp, FASTA); cp03 holds both purge branches
+    // cp02.fasta, cp03_taxpurge.fasta: (dataset meta, cp, FASTA)
     cp02 = CP02_VECSCREEN(cp01_assemblies)
     cp03_taxpurge = CP03_TAXPURGE(cp02.fasta)
+    // cp03: the taxpurge result, which the later steps (cp04-cp06) continue from
     cp03 = cp03_taxpurge.fasta
     timing_tsvs = timing_tsvs.mix(cp02.times, cp03_taxpurge.times)
-    if (params.fcs_gx_db) {
-        cp03_fcsgx = CP03_FCSGX(cp02.fasta)
-        cp03 = cp03.mix(cp03_fcsgx.fasta)
-        timing_tsvs = timing_tsvs.mix(cp03_fcsgx.times)
-    }
     checkpoints = checkpoints.mix(cp02.fasta, cp03)
+
+    // FCS-GX branch: only cp03, evaluated and compared with taxpurge; not continued to cp04-cp06.
+    // One batched job for all cp02 assemblies (one database copy), so it starts once every cp02 exists.
+    if (params.fcs_gx_db) {
+        // fcsgx_batch: one item, the list of all (meta, cp, cp02 FASTA)
+        fcsgx_batch = cp02.fasta.toList().filter { l -> l }
+        cp03_fcsgx_job = CP03_FCSGX(
+            fcsgx_batch.map { l -> l.collect { m, _cp, _a -> [m.id, m.taxid] } },
+            fcsgx_batch.map { l -> l.collect { _m, _cp, a -> a } },
+        )
+        // cp03_fcsgx: (dataset meta, 'cp03_purged_fcsgx', FASTA), matched back to each dataset by file name
+        cp03_fcsgx = cp03_fcsgx_job.fasta
+            .flatten()
+            .map { f -> tuple(f.name.replaceAll(/\.cp03_fcsgx\.fasta$/, ''), f) }
+            .join(cp02.fasta.map { m, _cp, _a -> tuple(m.id, m) })
+            .map { _id, f, m -> tuple(m, 'cp03_purged_fcsgx', f) }
+        checkpoints = checkpoints.mix(cp03_fcsgx)
+        timing_tsvs = timing_tsvs.mix(cp03_fcsgx_job.times)
+    }
 
     // clean_illumina_by_key: ([sample, spike_pct], [filtered R1, R2]); trackLinkKey [sample, spike_pct] links datasets of the same sample and
     // spike level across tracks (short ↔ long ↔ hybrid)
