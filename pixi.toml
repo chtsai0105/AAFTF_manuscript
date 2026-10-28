@@ -90,8 +90,9 @@ plot = { features = ["plot"], no-default-feature = true }
 busco = { features = ["busco"], no-default-feature = true }
 
 [pypi-dependencies]
-# pipeline_* / taxpurge / covpurge are newer than the bioconda release; pin the commit you benchmark
-aaftf = { git = "https://github.com/stajichlab/AAFTF.git", rev = "ccd6c26" }
+# AAFTF dev branch (newer than the bioconda release); pixi.lock pins the exact commit. Move to the latest dev
+# commit with `pixi update aaftf`; the pipeline then reruns the AAFTF steps on -resume (see params.aaftf_commit).
+aaftf = { git = "https://github.com/stajichlab/AAFTF.git", branch = "dev" }
 
 [tasks]
 fetch-samples = { cmd = "workflow/scripts/fetch_samples.sh", description = "Download fungal references in config/sim_samples.tsv" }

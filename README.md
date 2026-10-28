@@ -119,8 +119,9 @@ Datasets are named `<sample>_spike<pct>_<track>` (simulated) or `<sample>_real_<
   reused on later runs while the settings are unchanged (`reuse_reads`).
 - **Real datasets** run the same checkpoints and QUAST / BUSCO, but get no precision / recall: there is no answer key
   for which contigs are contaminants.
-- **Updating AAFTF.** AAFTF is pinned to a commit in `pixi.toml`. After changing it (and running `pixi lock`),
-  `-resume` reruns every AAFTF step and what depends on it, because each AAFTF job records the pinned commit.
-  Other tool updates do not trigger reruns; check `results/versions.tsv`, or run without `-resume`.
+- **Updating AAFTF.** AAFTF follows its `dev` branch (`pixi.toml`); `pixi.lock` pins the exact commit. `pixi update aaftf`
+  moves to the latest `dev` commit, and `-resume` then reruns every AAFTF step and what depends on it, because each
+  AAFTF job records the pinned commit. Other tool updates do not trigger reruns; check `results/versions.tsv`, or run
+  without `-resume`.
 - **Shared evaluation.** Checkpoints with identical sequences (e.g. a step that removed nothing) are evaluated once; the
   report marks them with `same_sequences_as`.
