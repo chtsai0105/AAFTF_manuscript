@@ -51,6 +51,7 @@ novoplasty = "*"               # mito (cp01)
 sourmash = ">=4.8"             # taxpurge (cp03 branch A)
 sourmash_plugin_branchwater = ">=0.9.15"
 ncbi-fcs-gx = "*"              # fcs_gx_purge (cp03 branch B, needs the GX database)
+apptainer = ">=1.4"            # container runtime for fcs_screen (NCBI FCS-adaptor); provides `singularity`
 pigz = "*"
 
 # --- read simulation ---

@@ -52,6 +52,8 @@ params.covpurge_mincovpct = 5
 params.fcs_gx_db = null
 // NCBI FCS-adaptor (AAFTF fcs_screen) as a comparison branch to vecscreen at cp02 (needs Singularity)
 params.fcs_screen = true
+// environment module providing Singularity for fcs_screen, loaded when singularity / apptainer is not on PATH
+params.singularity_module = 'singularity'
 // BUSCO download folder (<dir>/lineages/<lineage>; read-only is fine, used with --offline)
 params.busco_downloads = null
 
@@ -403,7 +405,6 @@ process CP02_VECSCREEN {
 // The run_fcsadaptor.sh script and container image come from the AAFTF databases (AAFTF_DB).
 process CP02_FCS_SCREEN {
     tag "${meta.id}"
-    module 'singularity'
     publishDir path: { "${params.outdir}/01_checkpoints/${meta.id}" }, mode: 'copy', pattern: '*.fasta'
 
     input:
@@ -416,6 +417,14 @@ process CP02_FCS_SCREEN {
     script:
     """
     # AAFTF ${params.aaftf_commit}
+    # Singularity: use it if already on PATH; otherwise load the cluster module. SLURM job scripts run in a plain
+    # bash without the `module` function, so the module init script is sourced first (not -u safe, hence set +u).
+    if ! command -v singularity >/dev/null && ! command -v apptainer >/dev/null; then
+        set +u
+        source "\${MODULESHOME:-/usr/share/Modules}/init/bash"
+        module load ${params.singularity_module}
+        set -u
+    fi
     timeit.sh ${meta.id} cp02_fcs_screen fcs_screen \\
         AAFTF fcs_screen -i ${asm} -o ${meta.id}.cp02_fcs_screen.fasta
     """
